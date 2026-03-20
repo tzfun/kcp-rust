@@ -28,36 +28,6 @@ This crate uses Cargo features to provide a layered architecture:
 
 Feature dependency chain: `kcp-tokio` → `kcp-core` → `kcp-sys`
 
-## Project Structure
-
-```
-kcp-io/
-├── Cargo.toml              # Single crate with feature flags
-├── build.rs                # Compiles KCP C code via cc crate
-├── kcp/                    # Original KCP C source
-│   ├── ikcp.c
-│   ├── ikcp.h
-│   └── wrapper.h
-├── src/
-│   ├── lib.rs              # Root module: feature-gated exports + re-exports
-│   ├── sys.rs              # Raw FFI bindings (feature: kcp-sys)
-│   ├── core/               # Safe Rust API wrapper (feature: kcp-core)
-│   │   ├── mod.rs
-│   │   ├── kcp.rs          # Kcp struct (safe wrapper around IKCPCB)
-│   │   ├── config.rs       # KcpConfig presets
-│   │   └── error.rs        # KcpError enum
-│   └── tokio_rt/           # Async tokio integration (feature: kcp-tokio)
-│       ├── mod.rs
-│       ├── stream.rs       # KcpStream (AsyncRead + AsyncWrite)
-│       ├── listener.rs     # KcpListener (accept incoming connections)
-│       ├── session.rs      # KcpSession (internal state machine)
-│       ├── config.rs       # KcpSessionConfig
-│       └── error.rs        # KcpTokioError
-├── tests/                  # Integration tests
-├── benches/                # Criterion benchmarks
-└── examples/               # Echo server & client
-```
-
 ## Quick Start
 
 Add to your `Cargo.toml`:
@@ -255,46 +225,6 @@ let config = KcpSessionConfig {
 | Small data | Each message is a packet | Merges small messages |
 | Use case | Game packets, RPC | File transfer, bulk data |
 
-## Building
-
-```bash
-# Build (default features: kcp-tokio)
-cargo build
-
-# Build with only core features
-cargo build --no-default-features --features kcp-core
-
-# Build in release mode
-cargo build --release
-```
-
-**Requirements:**
-- Rust 1.85+ (2021 edition)
-- A C compiler (MSVC on Windows, gcc/clang on Linux/macOS) — needed to compile `ikcp.c`
-
-## Testing
-
-```bash
-# Run all tests (unit + integration + doc tests)
-cargo test
-
-# Run only integration tests
-cargo test --test integration_tests
-
-# Run with logging
-RUST_LOG=debug cargo test -- --nocapture
-```
-
-## Running Examples
-
-```bash
-# Terminal 1: Start the echo server
-cargo run --example echo_server
-
-# Terminal 2: Run the echo client
-cargo run --example echo_client
-```
-
 ## Architecture
 
 ```
@@ -337,6 +267,79 @@ Client Side                              Server Side
 | CPU | Minimal — KCP is lightweight C code |
 | Memory | One `Kcp` instance per session (~10 KB) |
 | Concurrency | One `KcpSession` per connection, managed by tokio runtime |
+
+## Development
+
+### Requirements
+
+- Rust 1.85+ (2021 edition)
+- A C compiler (MSVC on Windows, gcc/clang on Linux/macOS) — needed to compile `ikcp.c`
+
+### Building
+
+```bash
+# Build (default features: kcp-tokio)
+cargo build
+
+# Build with only core features
+cargo build --no-default-features --features kcp-core
+
+# Build in release mode
+cargo build --release
+```
+
+### Testing
+
+```bash
+# Run all tests (unit + integration + doc tests)
+cargo test
+
+# Run only integration tests
+cargo test --test integration_tests
+
+# Run with logging
+RUST_LOG=debug cargo test -- --nocapture
+```
+
+### Running Examples
+
+```bash
+# Terminal 1: Start the echo server
+cargo run --example echo_server
+
+# Terminal 2: Run the echo client
+cargo run --example echo_client
+```
+
+### Project Structure
+
+```
+kcp-io/
+├── Cargo.toml              # Single crate with feature flags
+├── build.rs                # Compiles KCP C code via cc crate
+├── kcp/                    # Original KCP C source
+│   ├── ikcp.c
+│   ├── ikcp.h
+│   └── wrapper.h
+├── src/
+│   ├── lib.rs              # Root module: feature-gated exports + re-exports
+│   ├── sys.rs              # Raw FFI bindings (feature: kcp-sys)
+│   ├── core/               # Safe Rust API wrapper (feature: kcp-core)
+│   │   ├── mod.rs
+│   │   ├── kcp.rs          # Kcp struct (safe wrapper around IKCPCB)
+│   │   ├── config.rs       # KcpConfig presets
+│   │   └── error.rs        # KcpError enum
+│   └── tokio_rt/           # Async tokio integration (feature: kcp-tokio)
+│       ├── mod.rs
+│       ├── stream.rs       # KcpStream (AsyncRead + AsyncWrite)
+│       ├── listener.rs     # KcpListener (accept incoming connections)
+│       ├── session.rs      # KcpSession (internal state machine)
+│       ├── config.rs       # KcpSessionConfig
+│       └── error.rs        # KcpTokioError
+├── tests/                  # Integration tests
+├── benches/                # Criterion benchmarks
+└── examples/               # Echo server & client
+```
 
 ## License
 

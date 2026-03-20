@@ -18,33 +18,42 @@ KCP is a fast and reliable ARQ (Automatic Repeat reQuest) protocol that can **re
 
 ## Features
 
+This crate uses Cargo features to provide a layered architecture:
+
 - **`kcp-sys`** — Raw FFI bindings to the KCP C library (compiled from source via `cc`)
-- **`kcp-core`** — Safe, idiomatic Rust wrapper around KCP with `Send` support
-- **`kcp-tokio`** — Fully async `KcpStream` + `KcpListener` powered by tokio, with `AsyncRead`/`AsyncWrite` support
+- **`kcp-core`** — Safe, idiomatic Rust wrapper around KCP with `Send` support (implies `kcp-sys`)
+- **`kcp-tokio`** *(default)* — Fully async `KcpStream` + `KcpListener` powered by tokio, with `AsyncRead`/`AsyncWrite` support (implies `kcp-core`)
+
+Feature dependency chain: `kcp-tokio` → `kcp-core` → `kcp-sys`
 
 ## Project Structure
 
 ```
 kcp-io/
-├── Cargo.toml          # Crate configuration (with feature flags)
-├── kcp-sys/            # Raw FFI bindings (compiles C code via cc crate)
-│   ├── build.rs
-│   ├── kcp/            # Original C source (ikcp.c, ikcp.h)
-│   └── src/lib.rs      # extern "C" declarations
-├── kcp-core/           # Safe Rust API wrapper
-│   └── src/
-│       ├── kcp.rs      # Kcp struct (safe wrapper around IKCPCB)
-│       ├── config.rs   # KcpConfig presets
-│       └── error.rs    # KcpError enum
-└── kcp-tokio/          # Async tokio integration
-    ├── src/
-    │   ├── stream.rs   # KcpStream (AsyncRead + AsyncWrite)
-    │   ├── listener.rs # KcpListener (accept incoming connections)
-    │   ├── session.rs  # KcpSession (internal state machine)
-    │   ├── config.rs   # KcpSessionConfig
-    │   └── error.rs    # KcpTokioError
-    ├── tests/          # Integration tests
-    └── examples/       # Echo server & client
+├── Cargo.toml              # Single crate with feature flags
+├── build.rs                # Compiles KCP C code via cc crate
+├── kcp/                    # Original KCP C source
+│   ├── ikcp.c
+│   ├── ikcp.h
+│   └── wrapper.h
+├── src/
+│   ├── lib.rs              # Root module: feature-gated exports + re-exports
+│   ├── sys.rs              # Raw FFI bindings (feature: kcp-sys)
+│   ├── core/               # Safe Rust API wrapper (feature: kcp-core)
+│   │   ├── mod.rs
+│   │   ├── kcp.rs          # Kcp struct (safe wrapper around IKCPCB)
+│   │   ├── config.rs       # KcpConfig presets
+│   │   └── error.rs        # KcpError enum
+│   └── tokio_rt/           # Async tokio integration (feature: kcp-tokio)
+│       ├── mod.rs
+│       ├── stream.rs       # KcpStream (AsyncRead + AsyncWrite)
+│       ├── listener.rs     # KcpListener (accept incoming connections)
+│       ├── session.rs      # KcpSession (internal state machine)
+│       ├── config.rs       # KcpSessionConfig
+│       └── error.rs        # KcpTokioError
+├── tests/                  # Integration tests
+├── benches/                # Criterion benchmarks
+└── examples/               # Echo server & client
 ```
 
 ## Quick Start
@@ -53,15 +62,14 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-kcp-tokio = { path = "kcp-tokio" }
+kcp-io = "0.1"
 tokio = { version = "1", features = ["full"] }
 ```
 
 ### Echo Server
 
 ```rust
-use kcp_tokio::{KcpListener, KcpStream};
-use kcp_tokio::config::KcpSessionConfig;
+use kcp_io::{KcpListener, KcpSessionConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -91,8 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Echo Client
 
 ```rust
-use kcp_tokio::KcpStream;
-use kcp_tokio::config::KcpSessionConfig;
+use kcp_io::{KcpStream, KcpSessionConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -117,8 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use kcp_tokio::KcpStream;
-use kcp_tokio::config::KcpSessionConfig;
+use kcp_io::{KcpStream, KcpSessionConfig};
 
 async fn example() -> std::io::Result<()> {
     let mut stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast())
@@ -137,9 +143,32 @@ async fn example() -> std::io::Result<()> {
 }
 ```
 
+### Using Only the Core Layer
+
+If you only need the safe KCP wrapper without async support:
+
+```toml
+[dependencies]
+kcp-io = { version = "0.1", default-features = false, features = ["kcp-core"] }
+```
+
+```rust
+use kcp_io::core::{Kcp, KcpConfig};
+use std::io;
+
+let mut kcp = Kcp::new(0x01, |data: &[u8]| -> io::Result<usize> {
+    // Send data via your own transport
+    Ok(data.len())
+}).unwrap();
+
+kcp.apply_config(&KcpConfig::fast()).unwrap();
+kcp.send(b"Hello, KCP!").unwrap();
+kcp.update(0);
+```
+
 ## API Overview
 
-### `kcp-tokio` (Primary Crate)
+### `tokio_rt` module (default feature: `kcp-tokio`)
 
 | Type | Description |
 |------|-------------|
@@ -168,7 +197,7 @@ async fn example() -> std::io::Result<()> {
 | `accept()` | Accept the next incoming connection |
 | `local_addr()` | Get the listener's local address |
 
-### `kcp-core` (Low-level Safe API)
+### `core` module (feature: `kcp-core`)
 
 | Type | Description |
 |------|-------------|
@@ -176,7 +205,7 @@ async fn example() -> std::io::Result<()> {
 | `KcpConfig` | Protocol configuration (nodelay, interval, resend, etc.) |
 | `KcpError` | Error type for KCP operations |
 
-### `kcp-sys` (FFI, Advanced)
+### `sys` module (feature: `kcp-sys`)
 
 Direct bindings to all `ikcp_*` functions. You generally don't need to use this directly.
 
@@ -193,8 +222,8 @@ Direct bindings to all `ikcp_*` functions. You generally don't need to use this 
 ### Custom Configuration
 
 ```rust
-use kcp_tokio::config::KcpSessionConfig;
-use kcp_core::KcpConfig;
+use kcp_io::tokio_rt::KcpSessionConfig;
+use kcp_io::core::KcpConfig;
 use std::time::Duration;
 
 let config = KcpSessionConfig {
@@ -227,43 +256,41 @@ let config = KcpSessionConfig {
 ## Building
 
 ```bash
-# Build all crates
+# Build (default features: kcp-tokio)
 cargo build
+
+# Build with only core features
+cargo build --no-default-features --features kcp-core
 
 # Build in release mode
 cargo build --release
 ```
 
 **Requirements:**
-- Rust 1.70+ (2021 edition)
+- Rust 1.85+ (2021 edition)
 - A C compiler (MSVC on Windows, gcc/clang on Linux/macOS) — needed to compile `ikcp.c`
 
 ## Testing
 
 ```bash
 # Run all tests (unit + integration + doc tests)
-cargo test --workspace
+cargo test
 
 # Run only integration tests
-cargo test -p kcp-tokio --test integration_tests
+cargo test --test integration_tests
 
 # Run with logging
-RUST_LOG=debug cargo test --workspace -- --nocapture
+RUST_LOG=debug cargo test -- --nocapture
 ```
-
-**Test coverage: 44 tests total**
-- `kcp-sys`: 10 FFI verification tests
-- `kcp-core`: 20 unit tests + 4 doc tests
-- `kcp-tokio`: 4 integration tests + 6 doc tests
 
 ## Running Examples
 
 ```bash
 # Terminal 1: Start the echo server
-cargo run --example echo_server -p kcp-tokio
+cargo run --example echo_server
 
 # Terminal 2: Run the echo client
-cargo run --example echo_client -p kcp-tokio
+cargo run --example echo_client
 ```
 
 ## Architecture
@@ -283,10 +310,10 @@ Client Side                              Server Side
 │  ├─ update timer │                     │  ├─ mpsc channel │
 │  └─ UdpSocket    │                     │  └─ (shared UDP) │
 ├──────────────────┤                     ├──────────────────┤
-│  kcp-core (Kcp)  │                     │  kcp-core (Kcp)  │
+│  core::Kcp       │                     │  core::Kcp       │
 │  └─ output cb ───┼── UDP packets ──▶ ──┼─ input()        │
 ├──────────────────┤                     ├──────────────────┤
-│  kcp-sys (FFI)   │                     │  kcp-sys (FFI)   │
+│  sys (FFI)       │                     │  sys (FFI)       │
 │  └─ ikcp.c       │                     │  └─ ikcp.c       │
 └──────────────────┘                     └──────────────────┘
          │                                        │
@@ -297,7 +324,7 @@ Client Side                              Server Side
 - **Client sessions** own their UDP socket directly (`RecvMode::Socket`)
 - **Server sessions** receive packets via `mpsc::channel` from the listener's shared socket (`RecvMode::Channel`)
 - The `KcpListener` runs a background `tokio::spawn` task that multiplexes incoming UDP packets by `(SocketAddr, conv)` to the correct session channel
-- `KcpSession` drives `ikcp_update()` via a `tokio::time::interval` timer
+- `KcpSession` drives `ikcp_update()` during send/recv calls
 
 ## Performance Characteristics
 
@@ -316,4 +343,4 @@ MIT License. See [LICENSE](LICENSE) for details.
 ## Credits
 
 - [KCP](https://github.com/skywind3000/kcp) by skywind3000 — the original C implementation
-- [tokio](https://tokio.rs/) — the async runtime powering `kcp-tokio`
+- [tokio](https://tokio.rs/) — the async runtime powering the async layer

@@ -1,4 +1,27 @@
 //! KCP server listener for accepting incoming connections.
+//!
+//! This module provides [`KcpListener`], which binds to a UDP socket and accepts
+//! incoming KCP connections. It runs a background task that multiplexes incoming
+//! UDP packets by `(SocketAddr, conv)`, routing them to the appropriate
+//! [`KcpSession`](super::session::KcpSession) via `mpsc::channel`.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use kcp_io::tokio_rt::{KcpListener, KcpSessionConfig};
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut listener = KcpListener::bind("0.0.0.0:9090", KcpSessionConfig::fast()).await?;
+//! println!("Listening on {}", listener.local_addr());
+//!
+//! loop {
+//!     let (mut stream, addr) = listener.accept().await?;
+//!     println!("New connection from {} (conv={})", addr, stream.conv());
+//!     // Handle the stream...
+//! }
+//! # }
+//! ```
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -10,14 +33,50 @@ use super::error::{KcpTokioError, KcpTokioResult};
 use super::session::KcpSession;
 use super::stream::KcpStream;
 
+/// Composite key for identifying KCP sessions: `(remote address, conversation ID)`.
 type SessionKey = (SocketAddr, u32);
 
+/// A KCP server listener that accepts incoming connections.
+///
+/// `KcpListener` binds to a local UDP address and runs a background task that:
+/// 1. Receives all incoming UDP packets on the shared socket.
+/// 2. Extracts the KCP conversation ID from each packet header.
+/// 3. Routes packets to existing sessions via `mpsc::channel`, keyed by
+///    `(SocketAddr, conv)`.
+/// 4. Creates new [`KcpStream`]s for previously unseen `(addr, conv)` pairs
+///    and makes them available via [`accept()`](KcpListener::accept).
+///
+/// # Architecture
+///
+/// ```text
+/// UDP Socket (shared)
+///     │
+///     ▼
+/// Background Task (tokio::spawn)
+///     ├── Known session? → mpsc::Sender → KcpSession (Channel mode)
+///     └── New session?   → Create KcpSession → incoming_tx → accept()
+/// ```
 pub struct KcpListener {
+    /// Channel receiver for newly accepted connections.
     incoming_rx: mpsc::Receiver<(KcpStream, SocketAddr)>,
+    /// The local address the listener is bound to.
     local_addr: SocketAddr,
 }
 
 impl KcpListener {
+    /// Binds a KCP listener to the specified address.
+    ///
+    /// Starts a background task that receives UDP packets and routes them
+    /// to the appropriate KCP sessions.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` — Local address to bind to (e.g., `"0.0.0.0:9090"`).
+    /// * `config` — Session configuration applied to all accepted connections.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the UDP socket cannot be bound.
     pub async fn bind<A: tokio::net::ToSocketAddrs>(addr: A, config: KcpSessionConfig) -> KcpTokioResult<Self> {
         let socket = UdpSocket::bind(addr).await?;
         let local_addr = socket.local_addr()?;
@@ -28,12 +87,28 @@ impl KcpListener {
         Ok(Self { incoming_rx, local_addr })
     }
 
+    /// Accepts the next incoming KCP connection.
+    ///
+    /// Returns a tuple of `(KcpStream, SocketAddr)` where the `SocketAddr` is
+    /// the remote peer's address. Blocks until a new connection arrives.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KcpTokioError::Closed`] if the listener has been dropped.
     pub async fn accept(&mut self) -> KcpTokioResult<(KcpStream, SocketAddr)> {
         self.incoming_rx.recv().await.ok_or(KcpTokioError::Closed)
     }
 
+    /// Returns the local address this listener is bound to.
     pub fn local_addr(&self) -> SocketAddr { self.local_addr }
 
+    /// Background task that receives UDP packets and routes them to sessions.
+    ///
+    /// For each incoming packet:
+    /// 1. Skip packets smaller than `IKCP_OVERHEAD` (not valid KCP packets).
+    /// 2. Extract the conversation ID from the packet header.
+    /// 3. If a session for `(addr, conv)` exists, forward the packet via its channel.
+    /// 4. If no session exists, create a new one and send it via `incoming_tx`.
     async fn accept_loop(socket: Arc<UdpSocket>, config: KcpSessionConfig, incoming_tx: mpsc::Sender<(KcpStream, SocketAddr)>) {
         let mut recv_buf = vec![0u8; config.recv_buf_size];
         let mut sessions: HashMap<SessionKey, mpsc::Sender<Vec<u8>>> = HashMap::new();
@@ -43,19 +118,23 @@ impl KcpListener {
                 Err(e) => { log::error!("KcpListener: UDP recv error: {}", e); continue; }
             };
             let packet = recv_buf[..n].to_vec();
+            // Skip packets that are too small to be valid KCP packets
             if n < crate::sys::IKCP_OVERHEAD { continue; }
             let conv = Kcp::get_conv(&packet);
             let key = (addr, conv);
+            // Route to existing session
             if let Some(tx) = sessions.get(&key) {
                 if tx.send(packet).await.is_err() { sessions.remove(&key); }
                 continue;
             }
+            // Create new session for unknown (addr, conv) pair
             let (pkt_tx, pkt_rx) = mpsc::channel::<Vec<u8>>(256);
             let session = match KcpSession::new_with_channel(conv, socket.clone(), addr, config.clone(), pkt_rx) {
                 Ok(s) => s,
                 Err(e) => { log::error!("KcpListener: failed to create session: {}", e); continue; }
             };
             let stream = KcpStream::from_session(session);
+            // Feed the first packet to the new session's channel
             if pkt_tx.send(packet).await.is_err() { continue; }
             sessions.insert(key, pkt_tx);
             if incoming_tx.send((stream, addr)).await.is_err() { break; }

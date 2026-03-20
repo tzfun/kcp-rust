@@ -200,13 +200,47 @@ kcp-tokio（默认启用）
 ### 阶段 4：文档与完善
 
 - [x] **4.1** 完善 README.md ✅ 2026-03-20
+  - 项目简介 + What is KCP
+  - Features 说明（feature 层级关系）
+  - 项目结构图（已更新为单 crate 结构）
+  - 快速开始指南（Server/Client/AsyncRead/AsyncWrite/Core-only 示例）
+  - API 概览（`tokio_rt` / `core` / `sys` 模块表格）
+  - 配置说明（预设表格 + 自定义配置 + Stream vs Message 模式对比）
+  - 构建 / 测试 / 运行命令（已更新为单 crate 命令）
+  - 架构图 + 设计决策说明
+  - 性能特点表格
 - [x] **4.2** 编写各层的 rustdoc 文档 ✅ 2026-03-20
+  - `src/lib.rs` — crate 级文档 + Quick Start 示例
+  - `src/sys.rs` — 模块文档 + Safety 说明，所有类型/常量/函数注释
+  - `src/core/mod.rs` — 模块文档 + 主要类型说明 + 线程安全说明 + 示例
+  - `src/core/config.rs` — 模块文档 + `KcpConfig` 所有字段注释 + 预设方法文档
+  - `src/core/error.rs` — 模块文档 + `KcpError` 所有变体注释 + 字段注释
+  - `src/core/kcp.rs` — 模块文档 + `Kcp` 结构体文档 + 所有方法文档（参数、错误、示例）
+  - `src/tokio_rt/mod.rs` — 模块文档 + 架构说明 + 主要类型 + 示例
+  - `src/tokio_rt/config.rs` — 模块文档 + `KcpSessionConfig` 所有字段注释 + 预设方法文档
+  - `src/tokio_rt/error.rs` — 模块文档 + `KcpTokioError` 所有变体注释
+  - `src/tokio_rt/session.rs` — 模块文档 + `KcpSession` 结构体/字段文档 + 所有方法文档
+  - `src/tokio_rt/stream.rs` — 模块文档 + `KcpStream` 结构体文档 + 所有方法文档 + 示例
+  - `src/tokio_rt/listener.rs` — 模块文档 + `KcpListener` 结构体/架构文档 + 所有方法文档 + 示例
+  - 8 个 doc-test 全部通过
+  - `cargo doc --no-deps` 零警告 ✅
 - [x] **4.3** 添加 CI 配置（GitHub Actions） ✅ 2026-03-20
+  - `.github/workflows/ci.yml`
+  - 多平台编译测试（ubuntu/windows/macos × stable/1.85.0）
+  - 单元测试运行
+  - clippy 检查（-D warnings）
+  - rustfmt 格式检查
+  - 文档构建检查（RUSTDOCFLAGS=-D warnings）
+  - Cargo 缓存优化
 - [x] **4.4** 添加 LICENSE 文件（MIT） ✅ 2026-03-20
 - [x] **4.5** 性能测试与基准测试（`benches/throughput.rs`，criterion 框架） ✅ 2026-03-20
+  - KCP 吞吐量测试（64/256/1024/4096 字节）
+  - 原始 UDP 吞吐量基线
+  - TCP 吞吐量基线
+  - KCP 延迟测试（32 字节 ping-pong）
 - [x] **4.6** 发布前检查 ✅ 2026-03-20
   - `cargo clippy --all-targets -- -D warnings` 零警告 ✅
-  - `cargo test` 全部测试通过 ✅
+  - `cargo test` 全部 12 测试通过（4 集成 + 8 文档测试） ✅
   - `cargo doc --no-deps` 生成无误 ✅
   - 版本号 0.1.0 已设置 ✅
 

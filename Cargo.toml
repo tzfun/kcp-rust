@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "kcp-sys",
+    "kcp-core",
+    "kcp-tokio",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["kcp-rust contributors"]
+license = "MIT"
+repository = "https://github.com/user/kcp-rust"
+description = "A Rust wrapper for the KCP protocol, with async tokio support"

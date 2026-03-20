@@ -1,0 +1,30 @@
+# Rust build output
+/target/
+**/target/
+
+# Cargo lock for libraries (optional, keep if you want reproducible builds)
+# Cargo.lock
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+*.o
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+
+# Environment
+.env

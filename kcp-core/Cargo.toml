@@ -1,0 +1,12 @@
+[package]
+name = "kcp-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Safe Rust wrapper for the KCP protocol"
+
+[dependencies]
+kcp-sys = { path = "../kcp-sys" }
+thiserror = "2"
+log = "0.4"

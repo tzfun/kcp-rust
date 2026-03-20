@@ -1,5 +1,7 @@
 # kcp-io
 
+**[English](README.md) | [中文](README_ZH.md)**
+
 [![CI](https://github.com/tzfun/kcp-io/actions/workflows/ci.yml/badge.svg)](https://github.com/tzfun/kcp-io/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/kcp-io.svg)](https://crates.io/crates/kcp-io)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

@@ -1,9 +1,9 @@
 [package]
 name = "kcp-io"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 rust-version = "1.85.0"
-authors = ["kcp-rust contributors"]
+authors = ["tzfun beifengtz@qq.com"]
 license = "MIT"
 repository = "https://github.com/tzfun/kcp-io"
 description = "A Rust wrapper for the KCP protocol — FFI bindings, safe API, and async tokio integration"

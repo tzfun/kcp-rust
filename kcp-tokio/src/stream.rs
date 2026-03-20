@@ -213,7 +213,7 @@ impl AsyncRead for KcpStream {
             }
             Err(KcpTokioError::Io(e)) => return Poll::Ready(Err(e)),
             Err(e) => {
-                return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e.to_string())));
+                return Poll::Ready(Err(io::Error::other(e.to_string())));
             }
         }
 
@@ -248,7 +248,7 @@ impl AsyncRead for KcpStream {
                         Poll::Pending
                     }
                     Err(KcpTokioError::Closed) => Poll::Ready(Ok(())),
-                    Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e.to_string()))),
+                    Err(e) => Poll::Ready(Err(io::Error::other(e.to_string()))),
                 }
             }
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
@@ -276,7 +276,7 @@ impl AsyncWrite for KcpStream {
             }
             Err(KcpTokioError::Io(e)) => Poll::Ready(Err(e)),
             Err(e) => {
-                Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e.to_string())))
+                Poll::Ready(Err(io::Error::other(e.to_string())))
             }
         }
     }

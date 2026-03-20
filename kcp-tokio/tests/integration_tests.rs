@@ -3,6 +3,7 @@
 use kcp_tokio::{KcpListener, KcpStream};
 use kcp_tokio::config::KcpSessionConfig;
 use std::time::Duration;
+#[allow(unused_imports)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time;
 

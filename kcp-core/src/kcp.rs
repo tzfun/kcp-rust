@@ -26,13 +26,16 @@ use kcp_sys::{self, IKCPCB};
 use crate::config::KcpConfig;
 use crate::error::{KcpError, KcpResult};
 
+/// Type alias for the KCP output callback closure.
+type OutputCallback = Box<dyn FnMut(&[u8]) -> io::Result<usize>>;
+
 /// Internal context stored alongside the KCP instance.
 ///
 /// This is heap-allocated and its pointer is passed as the `user` data
 /// to the C KCP library. It holds the Rust output callback closure.
 struct KcpContext {
     /// The output callback that sends lower-level packets.
-    output: Box<dyn FnMut(&[u8]) -> io::Result<usize>>,
+    output: OutputCallback,
 }
 
 /// The C-compatible output callback function.

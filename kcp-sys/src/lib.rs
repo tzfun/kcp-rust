@@ -557,8 +557,8 @@ mod tests {
         use std::cell::RefCell;
 
         thread_local! {
-            static BUF_A_TO_B: RefCell<Vec<Vec<u8>>> = RefCell::new(Vec::new());
-            static BUF_B_TO_A: RefCell<Vec<Vec<u8>>> = RefCell::new(Vec::new());
+            static BUF_A_TO_B: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+            static BUF_B_TO_A: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
         }
 
         unsafe extern "C" fn output_a(

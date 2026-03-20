@@ -245,5 +245,5 @@ impl KcpSession {
     }
 }
 
-/// A KCP session wrapped in Arc<Mutex> for shared access.
+/// A KCP session wrapped in `Arc<Mutex>` for shared access.
 pub type SharedKcpSession = Arc<Mutex<KcpSession>>;

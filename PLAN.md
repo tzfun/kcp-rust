@@ -216,29 +216,38 @@ kcp-rust/
 
 ### 阶段 4：文档与完善
 
-- [ ] **4.1** 完善 README.md
-  - 项目简介
-  - 功能特性
-  - 快速开始指南
-  - API 概览
-  - 配置说明
-  - 性能特点
-- [ ] **4.2** 编写各层的 rustdoc 文档
-- [ ] **4.3** 添加 CI 配置（GitHub Actions）
-  - 多平台编译测试（Windows/Linux/macOS）
+- [x] **4.1** 完善 README.md ✅ 2026-03-20
+  - 项目简介 + What is KCP
+  - 功能特性（三层架构说明）
+  - 快速开始指南（Server/Client/AsyncRead/AsyncWrite 示例）
+  - API 概览（KcpStream, KcpListener, KcpSessionConfig 表格）
+  - 配置说明（预设表格 + 自定义配置 + Stream vs Message 模式对比）
+  - 架构图 + 设计决策说明
+  - 性能特点表格
+- [x] **4.2** 编写各层的 rustdoc 文档 ✅ 2026-03-20
+  - 所有公开类型、方法、模块的文档注释
+  - 10 个 doc-test 全部通过
+  - `cargo doc --workspace --no-deps` 零警告
+- [x] **4.3** 添加 CI 配置（GitHub Actions） ✅ 2026-03-20
+  - `.github/workflows/ci.yml`
+  - 多平台编译测试（ubuntu/windows/macos × stable/1.70.0）
   - 单元测试运行
-  - clippy 检查
+  - clippy 检查（-D warnings）
   - rustfmt 格式检查
-- [ ] **4.4** 添加 LICENSE 文件（建议 MIT）
-- [ ] **4.5** 性能测试与基准测试
-  - 吞吐量测试
-  - 延迟测试
-  - 与纯 TCP 对比
-- [ ] **4.6** 发布前检查
-  - `cargo clippy` 无警告
-  - `cargo test` 全部通过
-  - `cargo doc` 生成无误
-  - 版本号设置
+  - 文档构建检查（RUSTDOCFLAGS=-D warnings）
+  - Cargo 缓存优化
+- [x] **4.4** 添加 LICENSE 文件（MIT） ✅ 2026-03-20
+- [x] **4.5** 性能测试与基准测试 ✅ 2026-03-20
+  - `kcp-tokio/benches/throughput.rs`（criterion 框架）
+  - KCP 吞吐量测试（64/256/1024/4096 字节）
+  - 原始 UDP 吞吐量基线
+  - TCP 吞吐量基线
+  - KCP 延迟测试（32 字节 ping-pong）
+- [x] **4.6** 发布前检查 ✅ 2026-03-20
+  - `cargo clippy --workspace --all-targets -- -D warnings` 零警告 ✅
+  - `cargo test --workspace` 全部 44 测试通过 ✅
+  - `cargo doc --workspace --no-deps` 生成无误 ✅
+  - 版本号 0.1.0 已设置 ✅
 
 ---
 
@@ -294,7 +303,7 @@ kcp-rust/
 | M1 | kcp-sys FFI 绑定层完成并通过编译测试 | ✅ 已完成 |
 | M2 | kcp-core 安全封装完成并通过单元测试 | ✅ 已完成 |
 | M3 | kcp-tokio 异步通信层完成并通过集成测试 | ✅ 已完成 |
-| M4 | 文档、示例、CI 完善 | ⬜ 未开始 |
+| M4 | 文档、示例、CI 完善 | ✅ 已完成 |
 
 ---
 

@@ -1,16 +1,43 @@
-[workspace]
-resolver = "2"
-members = [
-    "kcp-sys",
-    "kcp-core",
-    "kcp-tokio",
-]
-
-[workspace.package]
+[package]
+name = "kcp-io"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85.0"
 authors = ["kcp-rust contributors"]
 license = "MIT"
-repository = "https://github.com/user/kcp-rust"
-description = "A Rust wrapper for the KCP protocol, with async tokio support"
+repository = "https://github.com/tzfun/kcp-rust"
+description = "A Rust wrapper for the KCP protocol — FFI bindings, safe API, and async tokio integration"
+readme = "README.md"
+keywords = ["kcp", "udp", "reliable", "tokio", "network"]
+categories = ["network-programming", "asynchronous"]
+links = "kcp"
+
+[features]
+default = ["kcp-tokio"]
+
+# Raw FFI bindings to the KCP C library
+kcp-sys = []
+
+# Safe Rust wrapper (implies kcp-sys)
+kcp-core = ["kcp-sys"]
+
+# Async tokio integration (implies kcp-core)
+kcp-tokio = ["kcp-core", "dep:tokio", "dep:bytes"]
+
+[dependencies]
+thiserror = "2"
+log = "0.4"
+tokio = { version = "1", features = ["net", "rt", "time", "sync", "macros", "io-util"], optional = true }
+bytes = { version = "1", optional = true }
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+env_logger = "0.11"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "throughput"
+harness = false

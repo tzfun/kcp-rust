@@ -19,12 +19,12 @@
 //! - It cannot be shared between threads without external synchronization
 //! - Use `Mutex<Kcp>` or `tokio::sync::Mutex<Kcp>` for concurrent access
 
-use std::os::raw::{c_char, c_int, c_long, c_void};
 use std::io;
+use std::os::raw::{c_char, c_int, c_long, c_void};
 
-use kcp_sys::{self, IKCPCB};
 use crate::config::KcpConfig;
 use crate::error::{KcpError, KcpResult};
+use kcp_sys::{self, IKCPCB};
 
 /// Type alias for the KCP output callback closure.
 type OutputCallback = Box<dyn FnMut(&[u8]) -> io::Result<usize>>;
@@ -150,7 +150,9 @@ impl Kcp {
 
         if kcp.is_null() {
             // Clean up context if create failed
-            unsafe { drop(Box::from_raw(ctx_ptr)); }
+            unsafe {
+                drop(Box::from_raw(ctx_ptr));
+            }
             return Err(KcpError::CreateFailed);
         }
 
@@ -226,11 +228,7 @@ impl Kcp {
     /// Returns `KcpError::SendFailed` if KCP rejects the data.
     pub fn send(&mut self, buf: &[u8]) -> KcpResult<usize> {
         let ret = unsafe {
-            kcp_sys::ikcp_send(
-                self.kcp,
-                buf.as_ptr() as *const c_char,
-                buf.len() as c_int,
-            )
+            kcp_sys::ikcp_send(self.kcp, buf.as_ptr() as *const c_char, buf.len() as c_int)
         };
         if ret < 0 {
             Err(KcpError::SendFailed(ret))
@@ -408,10 +406,7 @@ impl Kcp {
     pub fn set_mtu(&mut self, mtu: u32) -> KcpResult<()> {
         let ret = unsafe { kcp_sys::ikcp_setmtu(self.kcp, mtu as c_int) };
         if ret < 0 {
-            Err(KcpError::SetMtuFailed {
-                mtu,
-                code: ret,
-            })
+            Err(KcpError::SetMtuFailed { mtu, code: ret })
         } else {
             Ok(())
         }

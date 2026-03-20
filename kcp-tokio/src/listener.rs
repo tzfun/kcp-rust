@@ -75,10 +75,7 @@ impl KcpListener {
 
     /// Accept a new incoming KCP connection.
     pub async fn accept(&mut self) -> KcpTokioResult<(KcpStream, SocketAddr)> {
-        self.incoming_rx
-            .recv()
-            .await
-            .ok_or(KcpTokioError::Closed)
+        self.incoming_rx.recv().await.ok_or(KcpTokioError::Closed)
     }
 
     /// Get the local address the listener is bound to.

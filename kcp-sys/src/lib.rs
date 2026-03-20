@@ -113,8 +113,14 @@ pub struct IKCPSEG {
 /// - `user`: user-defined pointer (passed during `ikcp_create`)
 ///
 /// Should return 0 on success, or a negative value on error.
-pub type ikcp_output_callback =
-    Option<unsafe extern "C" fn(buf: *const c_char, len: c_int, kcp: *mut IKCPCB, user: *mut c_void) -> c_int>;
+pub type ikcp_output_callback = Option<
+    unsafe extern "C" fn(
+        buf: *const c_char,
+        len: c_int,
+        kcp: *mut IKCPCB,
+        user: *mut c_void,
+    ) -> c_int,
+>;
 
 /// Write log callback function type.
 ///
@@ -407,7 +413,10 @@ mod tests {
     fn test_create_and_release() {
         unsafe {
             let kcp = ikcp_create(0x11223344, ptr::null_mut());
-            assert!(!kcp.is_null(), "ikcp_create should return a non-null pointer");
+            assert!(
+                !kcp.is_null(),
+                "ikcp_create should return a non-null pointer"
+            );
 
             // Verify the conv was set correctly
             assert_eq!((*kcp).conv, 0x11223344);
@@ -512,7 +521,10 @@ mod tests {
 
             // No data received, peeksize should return negative
             let size = ikcp_peeksize(kcp);
-            assert!(size < 0, "peeksize should be negative when no data is available");
+            assert!(
+                size < 0,
+                "peeksize should be negative when no data is available"
+            );
 
             ikcp_release(kcp);
         }
@@ -643,7 +655,10 @@ mod tests {
                 );
                 if n > 0 {
                     let received_msg = &recv_buf[..n as usize];
-                    assert_eq!(received_msg, msg, "Received message should match sent message");
+                    assert_eq!(
+                        received_msg, msg,
+                        "Received message should match sent message"
+                    );
                     received = true;
                     break;
                 }

@@ -97,12 +97,9 @@ impl KcpStream {
         conv: u32,
     ) -> KcpTokioResult<Self> {
         // Resolve the remote address
-        let remote_addr = tokio::net::lookup_host(addr)
-            .await?
-            .next()
-            .ok_or_else(|| {
-                KcpTokioError::ConnectionFailed("could not resolve address".to_string())
-            })?;
+        let remote_addr = tokio::net::lookup_host(addr).await?.next().ok_or_else(|| {
+            KcpTokioError::ConnectionFailed("could not resolve address".to_string())
+        })?;
 
         // Bind to a local address matching the remote address family
         let local_addr = if remote_addr.is_ipv4() {
@@ -271,13 +268,12 @@ impl AsyncWrite for KcpStream {
     ) -> Poll<io::Result<usize>> {
         match self.session.send(buf) {
             Ok(n) => Poll::Ready(Ok(n)),
-            Err(KcpTokioError::Closed) => {
-                Poll::Ready(Err(io::Error::new(io::ErrorKind::BrokenPipe, "KCP session closed")))
-            }
+            Err(KcpTokioError::Closed) => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "KCP session closed",
+            ))),
             Err(KcpTokioError::Io(e)) => Poll::Ready(Err(e)),
-            Err(e) => {
-                Poll::Ready(Err(io::Error::other(e.to_string())))
-            }
+            Err(e) => Poll::Ready(Err(io::Error::other(e.to_string()))),
         }
     }
 

@@ -3,8 +3,8 @@
 //! This module provides [`KcpSessionConfig`] for configuring async KCP
 //! sessions, including KCP protocol parameters and session-level settings.
 
-use std::time::Duration;
 use kcp_core::KcpConfig;
+use std::time::Duration;
 
 /// Configuration for async KCP sessions.
 ///

@@ -1,7 +1,7 @@
 //! Integration tests for kcp-tokio.
 
-use kcp_tokio::{KcpListener, KcpStream};
 use kcp_tokio::config::KcpSessionConfig;
+use kcp_tokio::{KcpListener, KcpStream};
 use std::time::Duration;
 #[allow(unused_imports)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -36,7 +36,10 @@ async fn test_client_server_basic_communication() {
         println!("Server: received {} bytes", n);
 
         // Echo back
-        stream.send_kcp(&buf[..n]).await.expect("Server send failed");
+        stream
+            .send_kcp(&buf[..n])
+            .await
+            .expect("Server send failed");
         println!("Server: echoed {} bytes", n);
     });
 
@@ -44,13 +47,9 @@ async fn test_client_server_basic_communication() {
     time::sleep(Duration::from_millis(50)).await;
 
     // Client connects
-    let mut client = KcpStream::connect_with_conv(
-        server_addr,
-        config,
-        0x12345678,
-    )
-    .await
-    .expect("Client connect failed");
+    let mut client = KcpStream::connect_with_conv(server_addr, config, 0x12345678)
+        .await
+        .expect("Client connect failed");
 
     // Client sends data
     let msg = b"Hello, KCP server!";
@@ -61,7 +60,10 @@ async fn test_client_server_basic_communication() {
     let n = client.recv_kcp(&mut buf).await.expect("Client recv failed");
 
     assert_eq!(&buf[..n], msg);
-    println!("Client: received echo: {:?}", std::str::from_utf8(&buf[..n]));
+    println!(
+        "Client: received echo: {:?}",
+        std::str::from_utf8(&buf[..n])
+    );
 
     // Wait for server to finish
     let _ = time::timeout(Duration::from_secs(5), server_handle).await;
@@ -186,7 +188,11 @@ async fn test_multiple_messages() {
         .await
         .unwrap();
 
-    let messages = [b"First message" as &[u8], b"Second message", b"Third message"];
+    let messages = [
+        b"First message" as &[u8],
+        b"Second message",
+        b"Third message",
+    ];
 
     for msg in &messages {
         client.send_kcp(msg).await.unwrap();

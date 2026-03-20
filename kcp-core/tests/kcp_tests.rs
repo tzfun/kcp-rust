@@ -370,7 +370,10 @@ fn test_large_data_fragmentation() {
         }
     }
 
-    assert!(received, "Should have received the large fragmented message");
+    assert!(
+        received,
+        "Should have received the large fragmented message"
+    );
 }
 
 #[test]
@@ -405,7 +408,10 @@ fn test_output_callback_called() {
     kcp.send(b"hello").unwrap();
     kcp.update(100);
 
-    assert!(*call_count.borrow() > 0, "Output callback should have been called");
+    assert!(
+        *call_count.borrow() > 0,
+        "Output callback should have been called"
+    );
 }
 
 // =====================================================================

@@ -94,9 +94,7 @@ impl KcpSession {
             move |data: &[u8]| -> io::Result<usize> {
                 match socket_clone.try_send_to(data, remote) {
                     Ok(n) => Ok(n),
-                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        Ok(data.len())
-                    }
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(data.len()),
                     Err(e) => Err(e),
                 }
             },
@@ -165,25 +163,39 @@ impl KcpSession {
     }
 
     /// Check if the session is closed.
-    pub fn is_closed(&self) -> bool { self.closed }
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
 
     /// Close the session.
-    pub fn close(&mut self) { self.closed = true; }
+    pub fn close(&mut self) {
+        self.closed = true;
+    }
 
     /// Get the conversation ID.
-    pub fn conv(&self) -> u32 { self.kcp.conv() }
+    pub fn conv(&self) -> u32 {
+        self.kcp.conv()
+    }
 
     /// Get the remote address.
-    pub fn remote_addr(&self) -> SocketAddr { self.remote_addr }
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr
+    }
 
     /// Get how many packets are waiting to be sent.
-    pub fn waitsnd(&self) -> u32 { self.kcp.waitsnd() }
+    pub fn waitsnd(&self) -> u32 {
+        self.kcp.waitsnd()
+    }
 
     /// Get a reference to the underlying UDP socket.
-    pub fn socket(&self) -> &Arc<UdpSocket> { &self.socket }
+    pub fn socket(&self) -> &Arc<UdpSocket> {
+        &self.socket
+    }
 
     /// Get the session configuration.
-    pub fn config(&self) -> &KcpSessionConfig { &self.config }
+    pub fn config(&self) -> &KcpSessionConfig {
+        &self.config
+    }
 
     /// Async receive: waits for data, processing UDP/channel packets and KCP updates.
     pub async fn recv(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {

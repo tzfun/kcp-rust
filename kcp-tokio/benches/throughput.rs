@@ -23,7 +23,9 @@ fn bench_kcp_throughput(c: &mut Criterion) {
                 use kcp_tokio::{KcpListener, KcpStream};
 
                 let config = KcpSessionConfig::fast();
-                let mut listener = KcpListener::bind("127.0.0.1:0", config.clone()).await.unwrap();
+                let mut listener = KcpListener::bind("127.0.0.1:0", config.clone())
+                    .await
+                    .unwrap();
                 let addr = listener.local_addr();
 
                 let server = tokio::spawn(async move {
@@ -33,8 +35,9 @@ fn bench_kcp_throughput(c: &mut Criterion) {
                     stream.send_kcp(&buf[..n]).await.unwrap();
                 });
 
-                let mut client =
-                    KcpStream::connect(addr, KcpSessionConfig::fast()).await.unwrap();
+                let mut client = KcpStream::connect(addr, KcpSessionConfig::fast())
+                    .await
+                    .unwrap();
                 let data = vec![0xABu8; size];
                 client.send_kcp(&data).await.unwrap();
 
@@ -144,7 +147,9 @@ fn bench_kcp_latency(c: &mut Criterion) {
             use kcp_tokio::{KcpListener, KcpStream};
 
             let config = KcpSessionConfig::fast();
-            let mut listener = KcpListener::bind("127.0.0.1:0", config.clone()).await.unwrap();
+            let mut listener = KcpListener::bind("127.0.0.1:0", config.clone())
+                .await
+                .unwrap();
             let addr = listener.local_addr();
 
             let server = tokio::spawn(async move {
@@ -154,8 +159,13 @@ fn bench_kcp_latency(c: &mut Criterion) {
                 stream.send_kcp(&buf[..n]).await.unwrap();
             });
 
-            let mut client = KcpStream::connect(addr, KcpSessionConfig::fast()).await.unwrap();
-            client.send_kcp(b"ping-kcp-latency-test-32-bytes!!").await.unwrap();
+            let mut client = KcpStream::connect(addr, KcpSessionConfig::fast())
+                .await
+                .unwrap();
+            client
+                .send_kcp(b"ping-kcp-latency-test-32-bytes!!")
+                .await
+                .unwrap();
 
             let mut buf = [0u8; 32];
             client.recv_kcp(&mut buf).await.unwrap();

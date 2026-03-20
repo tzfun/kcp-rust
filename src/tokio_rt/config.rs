@@ -56,7 +56,13 @@ impl Default for KcpSessionConfig {
     /// - recv_buf_size: `65536`
     fn default() -> Self {
         let kcp_config = KcpConfig::default();
-        Self { flush_interval: Duration::from_millis(kcp_config.interval as u64), kcp_config, timeout: None, flush_write: true, recv_buf_size: 65536 }
+        Self {
+            flush_interval: Duration::from_millis(kcp_config.interval as u64),
+            kcp_config,
+            timeout: None,
+            flush_write: true,
+            recv_buf_size: 65536,
+        }
     }
 }
 
@@ -66,7 +72,13 @@ impl KcpSessionConfig {
     /// Uses [`KcpConfig::fast()`] with a 30-second timeout.
     pub fn fast() -> Self {
         let kcp_config = KcpConfig::fast();
-        Self { flush_interval: Duration::from_millis(kcp_config.interval as u64), kcp_config, timeout: Some(Duration::from_secs(30)), flush_write: true, recv_buf_size: 65536 }
+        Self {
+            flush_interval: Duration::from_millis(kcp_config.interval as u64),
+            kcp_config,
+            timeout: Some(Duration::from_secs(30)),
+            flush_write: true,
+            recv_buf_size: 65536,
+        }
     }
 
     /// Returns a balanced (normal) session configuration.
@@ -74,6 +86,12 @@ impl KcpSessionConfig {
     /// Uses [`KcpConfig::normal()`] with a 60-second timeout.
     pub fn normal() -> Self {
         let kcp_config = KcpConfig::normal();
-        Self { flush_interval: Duration::from_millis(kcp_config.interval as u64), kcp_config, timeout: Some(Duration::from_secs(60)), flush_write: true, recv_buf_size: 65536 }
+        Self {
+            flush_interval: Duration::from_millis(kcp_config.interval as u64),
+            kcp_config,
+            timeout: Some(Duration::from_secs(60)),
+            flush_write: true,
+            recv_buf_size: 65536,
+        }
     }
 }

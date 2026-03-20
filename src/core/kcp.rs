@@ -4,11 +4,11 @@
 //! It handles memory management (creation/release), output callback bridging, and
 //! exposes all KCP operations through a safe API with proper error handling.
 
-use std::io;
-use std::os::raw::{c_char, c_int, c_long, c_void};
 use super::config::KcpConfig;
 use super::error::{KcpError, KcpResult};
 use crate::sys::IKCPCB;
+use std::io;
+use std::os::raw::{c_char, c_int, c_long, c_void};
 
 /// Type alias for the output callback closure.
 ///
@@ -31,12 +31,20 @@ struct KcpContext {
 /// This function is called by the KCP C library. The `user` pointer must be
 /// a valid `*mut KcpContext` that was set via `ikcp_create`.
 unsafe extern "C" fn kcp_output_cb(
-    buf: *const c_char, len: c_int, _kcp: *mut IKCPCB, user: *mut c_void,
+    buf: *const c_char,
+    len: c_int,
+    _kcp: *mut IKCPCB,
+    user: *mut c_void,
 ) -> c_int {
-    if user.is_null() || buf.is_null() || len <= 0 { return -1; }
+    if user.is_null() || buf.is_null() || len <= 0 {
+        return -1;
+    }
     let ctx = &mut *(user as *mut KcpContext);
     let data = std::slice::from_raw_parts(buf as *const u8, len as usize);
-    match (ctx.output)(data) { Ok(_) => 0, Err(_) => -1 }
+    match (ctx.output)(data) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
 }
 
 /// Safe wrapper around the KCP control block (`IKCPCB`).
@@ -95,15 +103,23 @@ impl Kcp {
     ///
     /// Returns [`KcpError::CreateFailed`] if the C `ikcp_create` call fails.
     pub fn new<F>(conv: u32, output: F) -> KcpResult<Self>
-    where F: FnMut(&[u8]) -> io::Result<usize> + 'static {
-        let ctx = Box::new(KcpContext { output: Box::new(output) });
+    where
+        F: FnMut(&[u8]) -> io::Result<usize> + 'static,
+    {
+        let ctx = Box::new(KcpContext {
+            output: Box::new(output),
+        });
         let ctx_ptr = Box::into_raw(ctx);
         let kcp = unsafe { crate::sys::ikcp_create(conv, ctx_ptr as *mut c_void) };
         if kcp.is_null() {
-            unsafe { drop(Box::from_raw(ctx_ptr)); }
+            unsafe {
+                drop(Box::from_raw(ctx_ptr));
+            }
             return Err(KcpError::CreateFailed);
         }
-        unsafe { crate::sys::ikcp_setoutput(kcp, kcp_output_cb); }
+        unsafe {
+            crate::sys::ikcp_setoutput(kcp, kcp_output_cb);
+        }
         Ok(Kcp { kcp, _ctx: ctx_ptr })
     }
 
@@ -115,7 +131,9 @@ impl Kcp {
     ///
     /// Returns an error if creation or configuration fails.
     pub fn with_config<F>(conv: u32, config: &KcpConfig, output: F) -> KcpResult<Self>
-    where F: FnMut(&[u8]) -> io::Result<usize> + 'static {
+    where
+        F: FnMut(&[u8]) -> io::Result<usize> + 'static,
+    {
         let mut kcp = Self::new(conv, output)?;
         kcp.apply_config(config)?;
         Ok(kcp)
@@ -148,8 +166,14 @@ impl Kcp {
     ///
     /// Returns [`KcpError::SendFailed`] if the C `ikcp_send` call returns an error.
     pub fn send(&mut self, buf: &[u8]) -> KcpResult<usize> {
-        let ret = unsafe { crate::sys::ikcp_send(self.kcp, buf.as_ptr() as *const c_char, buf.len() as c_int) };
-        if ret < 0 { Err(KcpError::SendFailed(ret)) } else { Ok(buf.len()) }
+        let ret = unsafe {
+            crate::sys::ikcp_send(self.kcp, buf.as_ptr() as *const c_char, buf.len() as c_int)
+        };
+        if ret < 0 {
+            Err(KcpError::SendFailed(ret))
+        } else {
+            Ok(buf.len())
+        }
     }
 
     /// Receives data from the KCP protocol.
@@ -163,11 +187,26 @@ impl Kcp {
     /// - [`KcpError::RecvBufferTooSmall`] — Buffer is smaller than the next message.
     /// - [`KcpError::RecvFailed`] — Other receive error.
     pub fn recv(&mut self, buf: &mut [u8]) -> KcpResult<usize> {
-        let ret = unsafe { crate::sys::ikcp_recv(self.kcp, buf.as_mut_ptr() as *mut c_char, buf.len() as c_int) };
-        if ret >= 0 { Ok(ret as usize) }
-        else if ret == -1 { Err(KcpError::RecvWouldBlock) }
-        else if ret == -2 { let need = self.peeksize().unwrap_or(0); Err(KcpError::RecvBufferTooSmall { need, got: buf.len() }) }
-        else { Err(KcpError::RecvFailed(ret)) }
+        let ret = unsafe {
+            crate::sys::ikcp_recv(
+                self.kcp,
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as c_int,
+            )
+        };
+        if ret >= 0 {
+            Ok(ret as usize)
+        } else if ret == -1 {
+            Err(KcpError::RecvWouldBlock)
+        } else if ret == -2 {
+            let need = self.peeksize().unwrap_or(0);
+            Err(KcpError::RecvBufferTooSmall {
+                need,
+                got: buf.len(),
+            })
+        } else {
+            Err(KcpError::RecvFailed(ret))
+        }
     }
 
     /// Feeds raw packet data received from the transport layer into the KCP engine.
@@ -179,8 +218,18 @@ impl Kcp {
     ///
     /// Returns [`KcpError::InputFailed`] if the data is corrupted or invalid.
     pub fn input(&mut self, data: &[u8]) -> KcpResult<()> {
-        let ret = unsafe { crate::sys::ikcp_input(self.kcp, data.as_ptr() as *const c_char, data.len() as c_long) };
-        if ret < 0 { Err(KcpError::InputFailed(ret)) } else { Ok(()) }
+        let ret = unsafe {
+            crate::sys::ikcp_input(
+                self.kcp,
+                data.as_ptr() as *const c_char,
+                data.len() as c_long,
+            )
+        };
+        if ret < 0 {
+            Err(KcpError::InputFailed(ret))
+        } else {
+            Ok(())
+        }
     }
 
     /// Drives the KCP state machine. **Must be called periodically.**
@@ -192,18 +241,28 @@ impl Kcp {
     /// # Arguments
     ///
     /// * `current` — Current time in milliseconds (monotonic clock).
-    pub fn update(&mut self, current: u32) { unsafe { crate::sys::ikcp_update(self.kcp, current); } }
+    pub fn update(&mut self, current: u32) {
+        unsafe {
+            crate::sys::ikcp_update(self.kcp, current);
+        }
+    }
 
     /// Returns the earliest time (in ms) when [`update`](Kcp::update) should be called next.
     ///
     /// You can use this to optimize the update interval instead of calling
     /// `update()` at a fixed rate.
-    pub fn check(&self, current: u32) -> u32 { unsafe { crate::sys::ikcp_check(self.kcp, current) } }
+    pub fn check(&self, current: u32) -> u32 {
+        unsafe { crate::sys::ikcp_check(self.kcp, current) }
+    }
 
     /// Immediately flushes all pending data in the send queue.
     ///
     /// This forces KCP to invoke the output callback for any queued packets.
-    pub fn flush(&mut self) { unsafe { crate::sys::ikcp_flush(self.kcp); } }
+    pub fn flush(&mut self) {
+        unsafe {
+            crate::sys::ikcp_flush(self.kcp);
+        }
+    }
 
     /// Returns the size of the next available message in the receive queue.
     ///
@@ -212,14 +271,22 @@ impl Kcp {
     /// Returns [`KcpError::RecvWouldBlock`] if no complete message is available.
     pub fn peeksize(&self) -> KcpResult<usize> {
         let ret = unsafe { crate::sys::ikcp_peeksize(self.kcp) };
-        if ret < 0 { Err(KcpError::RecvWouldBlock) } else { Ok(ret as usize) }
+        if ret < 0 {
+            Err(KcpError::RecvWouldBlock)
+        } else {
+            Ok(ret as usize)
+        }
     }
 
     /// Returns the number of packets waiting to be sent (in the send queue + send buffer).
-    pub fn waitsnd(&self) -> u32 { unsafe { crate::sys::ikcp_waitsnd(self.kcp) as u32 } }
+    pub fn waitsnd(&self) -> u32 {
+        unsafe { crate::sys::ikcp_waitsnd(self.kcp) as u32 }
+    }
 
     /// Returns the conversation ID of this KCP instance.
-    pub fn conv(&self) -> u32 { unsafe { (*self.kcp).conv } }
+    pub fn conv(&self) -> u32 {
+        unsafe { (*self.kcp).conv }
+    }
 
     /// Sets the Maximum Transmission Unit (MTU).
     ///
@@ -230,12 +297,18 @@ impl Kcp {
     /// Returns [`KcpError::SetMtuFailed`] if the value is invalid or too small.
     pub fn set_mtu(&mut self, mtu: u32) -> KcpResult<()> {
         let ret = unsafe { crate::sys::ikcp_setmtu(self.kcp, mtu as c_int) };
-        if ret < 0 { Err(KcpError::SetMtuFailed { mtu, code: ret }) } else { Ok(()) }
+        if ret < 0 {
+            Err(KcpError::SetMtuFailed { mtu, code: ret })
+        } else {
+            Ok(())
+        }
     }
 
     /// Sets the send and receive window sizes (in number of packets).
     pub fn set_wndsize(&mut self, snd_wnd: u32, rcv_wnd: u32) {
-        unsafe { crate::sys::ikcp_wndsize(self.kcp, snd_wnd as c_int, rcv_wnd as c_int); }
+        unsafe {
+            crate::sys::ikcp_wndsize(self.kcp, snd_wnd as c_int, rcv_wnd as c_int);
+        }
     }
 
     /// Configures the nodelay mode and related parameters.
@@ -247,7 +320,15 @@ impl Kcp {
     /// * `resend` — Fast retransmit trigger count (0 to disable).
     /// * `nc` — Disable congestion control (`nocwnd` mode).
     pub fn set_nodelay(&mut self, nodelay: bool, interval: u32, resend: i32, nc: bool) {
-        unsafe { crate::sys::ikcp_nodelay(self.kcp, nodelay as c_int, interval as c_int, resend as c_int, nc as c_int); }
+        unsafe {
+            crate::sys::ikcp_nodelay(
+                self.kcp,
+                nodelay as c_int,
+                interval as c_int,
+                resend as c_int,
+                nc as c_int,
+            );
+        }
     }
 
     /// Enables or disables stream mode.
@@ -255,10 +336,16 @@ impl Kcp {
     /// In stream mode, KCP merges small packets and splits large ones,
     /// behaving like a TCP byte stream. In message mode (default), KCP
     /// preserves message boundaries.
-    pub fn set_stream_mode(&mut self, enabled: bool) { unsafe { (*self.kcp).stream = enabled as c_int; } }
+    pub fn set_stream_mode(&mut self, enabled: bool) {
+        unsafe {
+            (*self.kcp).stream = enabled as c_int;
+        }
+    }
 
     /// Returns whether stream mode is currently enabled.
-    pub fn is_stream_mode(&self) -> bool { unsafe { (*self.kcp).stream != 0 } }
+    pub fn is_stream_mode(&self) -> bool {
+        unsafe { (*self.kcp).stream != 0 }
+    }
 
     /// Extracts the conversation ID (conv) from a raw KCP packet header.
     ///
@@ -274,7 +361,9 @@ impl Drop for Kcp {
     fn drop(&mut self) {
         unsafe {
             crate::sys::ikcp_release(self.kcp);
-            if !self._ctx.is_null() { drop(Box::from_raw(self._ctx)); }
+            if !self._ctx.is_null() {
+                drop(Box::from_raw(self._ctx));
+            }
         }
     }
 }

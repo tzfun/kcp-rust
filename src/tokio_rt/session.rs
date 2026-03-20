@@ -9,16 +9,16 @@
 //! - Timeout detection
 //! - Two receive modes: direct socket (client) or channel (server)
 
+use super::config::KcpSessionConfig;
+use super::error::{KcpTokioError, KcpTokioResult};
+use crate::core::Kcp;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
-use crate::core::Kcp;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time;
-use super::config::KcpSessionConfig;
-use super::error::{KcpTokioError, KcpTokioResult};
 
 /// Determines how the session receives raw UDP packets.
 enum RecvMode {
@@ -72,37 +72,70 @@ impl KcpSession {
     /// * `socket` — Shared UDP socket for sending and receiving.
     /// * `remote_addr` — The remote peer's address.
     /// * `config` — Session configuration.
-    pub fn new(conv: u32, socket: Arc<UdpSocket>, remote_addr: SocketAddr, config: KcpSessionConfig) -> KcpTokioResult<Self> {
+    pub fn new(
+        conv: u32,
+        socket: Arc<UdpSocket>,
+        remote_addr: SocketAddr,
+        config: KcpSessionConfig,
+    ) -> KcpTokioResult<Self> {
         Self::new_inner(conv, socket, remote_addr, config, RecvMode::Socket)
     }
 
     /// Creates a new KCP session in channel mode (for server-side connections).
     ///
     /// The session will receive pre-routed UDP packets via the given channel.
-    pub(crate) fn new_with_channel(conv: u32, socket: Arc<UdpSocket>, remote_addr: SocketAddr, config: KcpSessionConfig, pkt_rx: mpsc::Receiver<Vec<u8>>) -> KcpTokioResult<Self> {
+    pub(crate) fn new_with_channel(
+        conv: u32,
+        socket: Arc<UdpSocket>,
+        remote_addr: SocketAddr,
+        config: KcpSessionConfig,
+        pkt_rx: mpsc::Receiver<Vec<u8>>,
+    ) -> KcpTokioResult<Self> {
         Self::new_inner(conv, socket, remote_addr, config, RecvMode::Channel(pkt_rx))
     }
 
     /// Internal constructor shared by both socket and channel modes.
-    fn new_inner(conv: u32, socket: Arc<UdpSocket>, remote_addr: SocketAddr, config: KcpSessionConfig, recv_mode: RecvMode) -> KcpTokioResult<Self> {
+    fn new_inner(
+        conv: u32,
+        socket: Arc<UdpSocket>,
+        remote_addr: SocketAddr,
+        config: KcpSessionConfig,
+        recv_mode: RecvMode,
+    ) -> KcpTokioResult<Self> {
         let socket_clone = socket.clone();
         let remote = remote_addr;
         // The output callback sends KCP packets via UDP.
         // Uses try_send_to to avoid blocking in the synchronous callback context.
-        let kcp = Kcp::with_config(conv, &config.kcp_config, move |data: &[u8]| -> io::Result<usize> {
-            match socket_clone.try_send_to(data, remote) {
-                Ok(n) => Ok(n),
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(data.len()),
-                Err(e) => Err(e),
-            }
-        })?;
+        let kcp = Kcp::with_config(
+            conv,
+            &config.kcp_config,
+            move |data: &[u8]| -> io::Result<usize> {
+                match socket_clone.try_send_to(data, remote) {
+                    Ok(n) => Ok(n),
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(data.len()),
+                    Err(e) => Err(e),
+                }
+            },
+        )?;
         let now = Instant::now();
-        Ok(Self { kcp, socket, remote_addr, udp_recv_buf: vec![0u8; config.recv_buf_size], config, start_time: now, last_recv_time: now, closed: false, recv_mode })
+        Ok(Self {
+            kcp,
+            socket,
+            remote_addr,
+            udp_recv_buf: vec![0u8; config.recv_buf_size],
+            config,
+            start_time: now,
+            last_recv_time: now,
+            closed: false,
+            recv_mode,
+        })
     }
 
     /// Returns the elapsed time in milliseconds since session creation.
     /// Used as KCP's monotonic clock source.
-    fn current_ms(&self) -> u32 { self.start_time.elapsed().as_millis() as u32 }
+    fn current_ms(&self) -> u32 {
+        self.start_time.elapsed().as_millis() as u32
+    }
 
     /// Sends data through the KCP session.
     ///
@@ -113,9 +146,13 @@ impl KcpSession {
     ///
     /// Returns [`KcpTokioError::Closed`] if the session is closed.
     pub fn send(&mut self, data: &[u8]) -> KcpTokioResult<usize> {
-        if self.closed { return Err(KcpTokioError::Closed); }
+        if self.closed {
+            return Err(KcpTokioError::Closed);
+        }
         let n = self.kcp.send(data)?;
-        if self.config.flush_write { self.kcp.flush(); }
+        if self.config.flush_write {
+            self.kcp.flush();
+        }
         Ok(n)
     }
 
@@ -123,7 +160,9 @@ impl KcpSession {
     ///
     /// Returns immediately with available data or an error if no data is ready.
     pub fn try_recv(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {
-        if self.closed { return Err(KcpTokioError::Closed); }
+        if self.closed {
+            return Err(KcpTokioError::Closed);
+        }
         Ok(self.kcp.recv(buf)?)
     }
 
@@ -135,33 +174,54 @@ impl KcpSession {
     }
 
     /// Drives the KCP state machine (retransmission, flushing, etc.).
-    pub fn update(&mut self) { let current = self.current_ms(); self.kcp.update(current); }
+    pub fn update(&mut self) {
+        let current = self.current_ms();
+        self.kcp.update(current);
+    }
 
     /// Returns whether the session has timed out based on the configured timeout.
-    pub fn is_timed_out(&self) -> bool { self.config.timeout.map_or(false, |t| self.last_recv_time.elapsed() > t) }
+    pub fn is_timed_out(&self) -> bool {
+        self.config
+            .timeout
+            .is_some_and(|t| self.last_recv_time.elapsed() > t)
+    }
 
     /// Returns whether the session has been closed.
     #[allow(dead_code)]
-    pub fn is_closed(&self) -> bool { self.closed }
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
 
     /// Closes the session. Subsequent send/recv operations will return [`KcpTokioError::Closed`].
-    pub fn close(&mut self) { self.closed = true; }
+    pub fn close(&mut self) {
+        self.closed = true;
+    }
 
     /// Returns the conversation ID.
-    pub fn conv(&self) -> u32 { self.kcp.conv() }
+    pub fn conv(&self) -> u32 {
+        self.kcp.conv()
+    }
 
     /// Returns the remote peer's address.
-    pub fn remote_addr(&self) -> SocketAddr { self.remote_addr }
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr
+    }
 
     /// Returns the number of packets waiting to be sent.
     #[allow(dead_code)]
-    pub fn waitsnd(&self) -> u32 { self.kcp.waitsnd() }
+    pub fn waitsnd(&self) -> u32 {
+        self.kcp.waitsnd()
+    }
 
     /// Returns a reference to the underlying UDP socket.
-    pub fn socket(&self) -> &Arc<UdpSocket> { &self.socket }
+    pub fn socket(&self) -> &Arc<UdpSocket> {
+        &self.socket
+    }
 
     /// Returns a reference to the session configuration.
-    pub fn config(&self) -> &KcpSessionConfig { &self.config }
+    pub fn config(&self) -> &KcpSessionConfig {
+        &self.config
+    }
 
     /// Receives data asynchronously, blocking until data is available.
     ///
@@ -176,7 +236,9 @@ impl KcpSession {
     /// - [`KcpTokioError::Kcp`] — KCP engine error.
     /// - [`KcpTokioError::Io`] — UDP socket I/O error.
     pub async fn recv(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {
-        if self.closed { return Err(KcpTokioError::Closed); }
+        if self.closed {
+            return Err(KcpTokioError::Closed);
+        }
         loop {
             // Try to receive from KCP first (data may already be reassembled)
             match self.kcp.recv(buf) {
@@ -185,7 +247,10 @@ impl KcpSession {
                 Err(e) => return Err(e.into()),
             }
             // Check timeout
-            if self.is_timed_out() { self.closed = true; return Err(KcpTokioError::Timeout); }
+            if self.is_timed_out() {
+                self.closed = true;
+                return Err(KcpTokioError::Timeout);
+            }
             let flush_interval = self.config.flush_interval;
             // Wait for new data or timer tick
             match &mut self.recv_mode {

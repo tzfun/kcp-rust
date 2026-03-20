@@ -69,7 +69,16 @@ impl Default for KcpConfig {
     /// - snd_wnd: `32`, rcv_wnd: `128`
     /// - stream_mode: `false`
     fn default() -> Self {
-        Self { nodelay: false, interval: 100, resend: 0, nc: false, mtu: 1400, snd_wnd: 32, rcv_wnd: 128, stream_mode: false }
+        Self {
+            nodelay: false,
+            interval: 100,
+            resend: 0,
+            nc: false,
+            mtu: 1400,
+            snd_wnd: 32,
+            rcv_wnd: 128,
+            stream_mode: false,
+        }
     }
 }
 
@@ -86,7 +95,16 @@ impl KcpConfig {
     /// - snd_wnd: `128`, rcv_wnd: `128`
     /// - stream_mode: `false`
     pub fn fast() -> Self {
-        Self { nodelay: true, interval: 10, resend: 2, nc: true, mtu: 1400, snd_wnd: 128, rcv_wnd: 128, stream_mode: false }
+        Self {
+            nodelay: true,
+            interval: 10,
+            resend: 2,
+            nc: true,
+            mtu: 1400,
+            snd_wnd: 128,
+            rcv_wnd: 128,
+            stream_mode: false,
+        }
     }
 
     /// Returns a balanced (normal) configuration preset.
@@ -101,6 +119,15 @@ impl KcpConfig {
     /// - snd_wnd: `64`, rcv_wnd: `128`
     /// - stream_mode: `false`
     pub fn normal() -> Self {
-        Self { nodelay: true, interval: 40, resend: 2, nc: false, mtu: 1400, snd_wnd: 64, rcv_wnd: 128, stream_mode: false }
+        Self {
+            nodelay: true,
+            interval: 40,
+            resend: 2,
+            nc: false,
+            mtu: 1400,
+            snd_wnd: 64,
+            rcv_wnd: 128,
+            stream_mode: false,
+        }
     }
 }

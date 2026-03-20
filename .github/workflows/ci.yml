@@ -39,10 +39,10 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.rust }}-
 
       - name: Build
-        run: cargo build --workspace --all-targets
+        run: cargo build --all-targets
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test
 
   clippy:
     name: Clippy
@@ -67,7 +67,7 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
   fmt:
     name: Rustfmt
@@ -81,7 +81,7 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo fmt -- --check
 
   doc:
     name: Documentation
@@ -104,6 +104,6 @@ jobs:
             ${{ runner.os }}-cargo-doc-
 
       - name: Build documentation
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings

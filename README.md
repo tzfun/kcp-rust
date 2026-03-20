@@ -1,6 +1,7 @@
-# kcp-rust
+# kcp-io
 
-[![CI](https://github.com/tzfun/kcp-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/tzfun/kcp-rust/actions/workflows/ci.yml)
+[![CI](https://github.com/tzfun/kcp-io/actions/workflows/ci.yml/badge.svg)](https://github.com/tzfun/kcp-io/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/kcp-io.svg)](https://crates.io/crates/kcp-io)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Rust wrapper for the [KCP](https://github.com/skywind3000/kcp) protocol, providing safe bindings to the original C implementation and an async UDP communication layer based on [tokio](https://tokio.rs/).
@@ -24,8 +25,8 @@ KCP is a fast and reliable ARQ (Automatic Repeat reQuest) protocol that can **re
 ## Project Structure
 
 ```
-kcp-rust/
-├── Cargo.toml          # Workspace configuration
+kcp-io/
+├── Cargo.toml          # Crate configuration (with feature flags)
 ├── kcp-sys/            # Raw FFI bindings (compiles C code via cc crate)
 │   ├── build.rs
 │   ├── kcp/            # Original C source (ikcp.c, ikcp.h)

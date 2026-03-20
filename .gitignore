@@ -2,8 +2,8 @@
 /target/
 **/target/
 
-# Cargo lock for libraries (optional, keep if you want reproducible builds)
-# Cargo.lock
+# Cargo lock for libraries (not committed — each Rust version generates its own)
+Cargo.lock
 
 # IDE files
 .idea/

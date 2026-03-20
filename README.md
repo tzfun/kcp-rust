@@ -1,6 +1,6 @@
 # kcp-rust
 
-[![CI](https://github.com/user/kcp-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/user/kcp-rust/actions/workflows/ci.yml)
+[![CI](https://github.com/tzfun/kcp-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/tzfun/kcp-rust/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Rust wrapper for the [KCP](https://github.com/skywind3000/kcp) protocol, providing safe bindings to the original C implementation and an async UDP communication layer based on [tokio](https://tokio.rs/).

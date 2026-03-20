@@ -130,6 +130,14 @@ impl KcpListener {
             let (n, addr) = match socket.recv_from(&mut recv_buf).await {
                 Ok(result) => result,
                 Err(e) => {
+                    // On Windows, error 10054 (WSAECONNRESET / ConnectionReset) is
+                    // returned when an ICMP "Port Unreachable" message is received.
+                    // This is normal when a remote peer has closed its UDP socket.
+                    // We silently ignore it and continue accepting new packets.
+                    if e.kind() == std::io::ErrorKind::ConnectionReset {
+                        log::debug!("KcpListener: peer connection reset (ignored)");
+                        continue;
+                    }
                     log::error!("KcpListener: UDP recv error: {}", e);
                     continue;
                 }
@@ -144,6 +152,8 @@ impl KcpListener {
             // Route to existing session
             if let Some(tx) = sessions.get(&key) {
                 if tx.send(packet).await.is_err() {
+                    // Session's receiver has been dropped, clean up
+                    log::debug!("KcpListener: session {:?} closed, removing", key);
                     sessions.remove(&key);
                 }
                 continue;

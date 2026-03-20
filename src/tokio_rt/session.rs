@@ -113,6 +113,10 @@ impl KcpSession {
                 match socket_clone.try_send_to(data, remote) {
                     Ok(n) => Ok(n),
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(data.len()),
+                    // On Windows, ConnectionReset (error 10054) can occur when the
+                    // remote peer has closed its UDP socket. We silently ignore it
+                    // since KCP will handle retransmission or timeout on its own.
+                    Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => Ok(data.len()),
                     Err(e) => Err(e),
                 }
             },

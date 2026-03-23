@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.0.3] — 2026-03-23
 
 ### Added
 
@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   randomly dropping packets at the configured rate via xorshift64 PRNG.
   Proxy statistics (forwarded/dropped counts, actual loss rate) are printed
   after each test run.
+- **CHANGELOG.md**: Added changelog tracking all changes since project
+  creation, following [Keep a Changelog](https://keepachangelog.com/) format.
+- **AI coding rules** (`.codemaker/rules/rules.mdc`): Comprehensive rules
+  file for consistent AI-assisted code generation.
 
 ---
 

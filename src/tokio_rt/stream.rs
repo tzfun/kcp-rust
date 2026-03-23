@@ -158,6 +158,45 @@ impl KcpStream {
     pub async fn recv_kcp(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {
         self.session.recv(buf).await
     }
+
+    /// Flushes all pending data in the KCP send queue.
+    ///
+    /// Forces the KCP engine to transmit any queued packets immediately via the
+    /// output callback.
+    pub fn flush(&mut self) {
+        self.session.update();
+    }
+
+    /// Closes the KCP stream.
+    ///
+    /// After calling this method, subsequent [`send_kcp()`](KcpStream::send_kcp) and
+    /// [`recv_kcp()`](KcpStream::recv_kcp) calls will return [`KcpTokioError::Closed`].
+    ///
+    /// > **Note:** KCP is a UDP-based protocol without a built-in connection teardown
+    /// > handshake (unlike TCP's FIN/FIN-ACK). Calling `close()` only shuts down the
+    /// > local side. The remote peer will detect the disconnection when its session
+    /// > times out (controlled by [`KcpSessionConfig::timeout`]).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use kcp_io::tokio_rt::{KcpStream, KcpSessionConfig};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
+    /// stream.send_kcp(b"goodbye").await?;
+    /// stream.close();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn close(&mut self) {
+        self.session.close();
+    }
+
+    /// Returns whether the stream has been closed.
+    pub fn is_closed(&self) -> bool {
+        self.session.is_closed()
+    }
 }
 
 impl AsyncRead for KcpStream {

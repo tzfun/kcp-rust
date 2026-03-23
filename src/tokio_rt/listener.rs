@@ -30,6 +30,7 @@ use crate::core::Kcp;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
@@ -126,6 +127,12 @@ impl KcpListener {
     ) {
         let mut recv_buf = vec![0u8; config.recv_buf_size];
         let mut sessions: HashMap<SessionKey, mpsc::Sender<Vec<u8>>> = HashMap::new();
+        // Tracks recently closed sessions to avoid re-creating them from stale
+        // retransmission packets. Maps session key to the time it was closed.
+        let mut closed_sessions: HashMap<SessionKey, Instant> = HashMap::new();
+        // How long to remember closed sessions (prevents stale packets from
+        // creating ghost sessions). Should be longer than KCP's max retransmit window.
+        let closed_session_ttl = std::time::Duration::from_secs(60);
         loop {
             let (n, addr) = match socket.recv_from(&mut recv_buf).await {
                 Ok(result) => result,
@@ -152,11 +159,25 @@ impl KcpListener {
             // Route to existing session
             if let Some(tx) = sessions.get(&key) {
                 if tx.send(packet).await.is_err() {
-                    // Session's receiver has been dropped, clean up
+                    // Session's receiver has been dropped, clean up and remember
+                    // it as closed to prevent re-creation from stale packets.
                     log::debug!("KcpListener: session {:?} closed, removing", key);
                     sessions.remove(&key);
+                    closed_sessions.insert(key, Instant::now());
                 }
                 continue;
+            }
+            // Skip packets from recently closed sessions (stale retransmissions).
+            if let Some(closed_at) = closed_sessions.get(&key) {
+                if closed_at.elapsed() < closed_session_ttl {
+                    continue;
+                }
+                // TTL expired, allow new connections from this (addr, conv)
+                closed_sessions.remove(&key);
+            }
+            // Periodically clean up expired entries from the closed sessions map
+            if closed_sessions.len() > 100 {
+                closed_sessions.retain(|_, closed_at| closed_at.elapsed() < closed_session_ttl);
             }
             // Create new session for unknown (addr, conv) pair
             let (pkt_tx, pkt_rx) = mpsc::channel::<Vec<u8>>(256);

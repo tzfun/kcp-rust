@@ -191,7 +191,6 @@ impl KcpSession {
     }
 
     /// Returns whether the session has been closed.
-    #[allow(dead_code)]
     pub fn is_closed(&self) -> bool {
         self.closed
     }

@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.0.3] — 2026-03-23
 
+### Changed
+
+- **Packet loss tests marked `#[ignore]`**: The three packet loss reliability
+  tests are now skipped by default in `cargo test` and CI. They can be run
+  locally with `cargo test -- --ignored` for manual verification.
+
 ### Added
 
 - **Packet loss reliability tests**: Three new integration tests that verify

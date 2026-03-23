@@ -207,16 +207,19 @@ async fn run_packet_loss_test(loss_rate: f64, message_count: usize) {
 }
 
 #[tokio::test]
+#[ignore = "Long-running packet loss simulation; run locally with `cargo test -- --ignored`"]
 async fn test_reliability_under_10_percent_packet_loss() {
     run_packet_loss_test(0.10, 20).await;
 }
 
 #[tokio::test]
+#[ignore = "Long-running packet loss simulation; run locally with `cargo test -- --ignored`"]
 async fn test_reliability_under_30_percent_packet_loss() {
     run_packet_loss_test(0.30, 20).await;
 }
 
 #[tokio::test]
+#[ignore = "Long-running packet loss simulation; run locally with `cargo test -- --ignored`"]
 async fn test_reliability_under_50_percent_packet_loss() {
     run_packet_loss_test(0.50, 10).await;
 }

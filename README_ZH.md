@@ -115,6 +115,38 @@ async fn example() -> std::io::Result<()> {
 }
 ```
 
+### 读写分离 (`into_split`)
+
+`KcpStream::into_split()` 将一个流拆分为独立的读半和写半，支持在不同 task 中并发读写 — 类似于 [`TcpStream::into_split()`](https://docs.rs/tokio/latest/tokio/net/struct.TcpStream.html#method.into_split)：
+
+```rust
+use kcp_io::{KcpStream, KcpSessionConfig};
+
+async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    let stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
+    let (mut read_half, mut write_half) = stream.into_split();
+
+    // 在独立 task 中读取
+    let reader = tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            match read_half.recv_kcp(&mut buf).await {
+                Ok(n) => println!("收到：{}", String::from_utf8_lossy(&buf[..n])),
+                Err(_) => break,
+            }
+        }
+    });
+
+    // 在当前 task 中写入
+    write_half.send_kcp(b"hello").await?;
+    write_half.send_kcp(b"world").await?;
+    write_half.close().await;
+
+    reader.await?;
+    Ok(())
+}
+```
+
 ### 仅使用 Core 层
 
 如果你只需要安全的 KCP 封装，不需要异步支持：
@@ -157,9 +189,31 @@ kcp.update(0);
 | `connect_with_conv(addr, conv, config)` | 使用指定的会话 ID 连接 |
 | `send_kcp(data)` | 可靠地发送数据 |
 | `recv_kcp(buf)` | 接收数据 |
+| `into_split()` | 拆分为 `OwnedReadHalf` + `OwnedWriteHalf`，支持并发读写 |
+| `close()` | 关闭流 |
+| `flush()` | 刷新待发送的 KCP 数据 |
 | `conv()` | 获取会话 ID |
 | `remote_addr()` | 获取远程地址 |
 | `local_addr()` | 获取本地地址 |
+
+**`OwnedReadHalf` 方法**（通过 `into_split()` 获得）：
+
+| 方法 | 说明 |
+|------|------|
+| `recv_kcp(buf)` | 接收数据（异步，锁不跨 await 点持有） |
+| `conv()` | 获取会话 ID |
+| `remote_addr()` | 获取远程地址 |
+| `local_addr()` | 获取本地地址 |
+
+**`OwnedWriteHalf` 方法**（通过 `into_split()` 获得）：
+
+| 方法 | 说明 |
+|------|------|
+| `send_kcp(data)` | 可靠地发送数据 |
+| `flush()` | 刷新待发送的 KCP 数据 |
+| `close()` | 关闭流（两半都会受影响） |
+| `is_closed()` | 检查流是否已关闭 |
+| `conv()` | 获取会话 ID |
 
 **`KcpListener` 方法：**
 

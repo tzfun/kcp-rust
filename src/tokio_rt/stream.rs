@@ -25,6 +25,7 @@
 use super::config::KcpSessionConfig;
 use super::error::{KcpTokioError, KcpTokioResult};
 use super::session::KcpSession;
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -314,4 +315,404 @@ fn rand_conv() -> u32 {
         .unwrap_or_default()
         .as_nanos();
     ((seed ^ (seed >> 16) ^ (seed >> 32)) & 0xFFFFFFFF) as u32
+}
+
+// ---------------------------------------------------------------------------
+// Split support: OwnedReadHalf / OwnedWriteHalf
+// ---------------------------------------------------------------------------
+
+use std::time::Duration;
+use tokio::sync::Mutex as TokioMutex;
+
+/// Determines how the read half receives raw UDP packets after split.
+enum RecvSource {
+    /// Client mode: reads directly from the shared `UdpSocket`.
+    Socket,
+    /// Server mode: receives packets from `mpsc::channel`.
+    Channel(tokio::sync::mpsc::Receiver<Vec<u8>>),
+}
+
+/// The read half of a [`KcpStream`], created by [`KcpStream::into_split()`].
+///
+/// `OwnedReadHalf` can receive data independently from `OwnedWriteHalf`,
+/// allowing concurrent reading and writing from separate tasks.
+///
+/// The KCP session state is shared with the write half via `Arc<Mutex>`,
+/// but the mutex is **never held across await points**, ensuring both halves
+/// can operate concurrently without deadlocks.
+///
+/// # Example
+///
+/// ```no_run
+/// use kcp_io::tokio_rt::{KcpStream, KcpSessionConfig};
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
+/// let (mut read_half, mut write_half) = stream.into_split();
+///
+/// // Spawn a task for reading
+/// let reader = tokio::spawn(async move {
+///     let mut buf = [0u8; 4096];
+///     while let Ok(n) = read_half.recv_kcp(&mut buf).await {
+///         println!("Received: {:?}", &buf[..n]);
+///     }
+/// });
+///
+/// // Write from the current task
+/// write_half.send_kcp(b"hello").await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct OwnedReadHalf {
+    session: Arc<TokioMutex<KcpSession>>,
+    socket: Arc<UdpSocket>,
+    remote_addr: SocketAddr,
+    recv_source: RecvSource,
+    udp_recv_buf: Vec<u8>,
+    flush_interval: Duration,
+    read_buf: Vec<u8>,
+    read_pos: usize,
+    read_len: usize,
+}
+
+/// The write half of a [`KcpStream`], created by [`KcpStream::into_split()`].
+///
+/// `OwnedWriteHalf` can send data independently from `OwnedReadHalf`,
+/// allowing concurrent reading and writing from separate tasks.
+///
+/// # Example
+///
+/// ```no_run
+/// use kcp_io::tokio_rt::{KcpStream, KcpSessionConfig};
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
+/// let (mut read_half, mut write_half) = stream.into_split();
+///
+/// write_half.send_kcp(b"hello").await?;
+/// write_half.close().await;
+/// # Ok(())
+/// # }
+/// ```
+pub struct OwnedWriteHalf {
+    session: Arc<TokioMutex<KcpSession>>,
+}
+
+impl KcpStream {
+    /// Splits this `KcpStream` into a read half and a write half, allowing
+    /// concurrent reading and writing from separate tasks.
+    ///
+    /// This is similar to [`TcpStream::into_split()`](tokio::net::TcpStream::into_split).
+    /// The underlying KCP session state is shared via `Arc<Mutex>`, but the
+    /// mutex is only held for brief synchronous operations (never across await
+    /// points), so both halves can operate concurrently.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use kcp_io::tokio_rt::{KcpStream, KcpSessionConfig};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
+    /// let (mut read_half, mut write_half) = stream.into_split();
+    ///
+    /// let reader = tokio::spawn(async move {
+    ///     let mut buf = [0u8; 4096];
+    ///     while let Ok(n) = read_half.recv_kcp(&mut buf).await {
+    ///         println!("Received {} bytes", n);
+    ///     }
+    /// });
+    ///
+    /// write_half.send_kcp(b"hello").await?;
+    /// write_half.send_kcp(b"world").await?;
+    /// write_half.close().await;
+    ///
+    /// reader.await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn into_split(mut self) -> (OwnedReadHalf, OwnedWriteHalf) {
+        let socket = self.session.socket().clone();
+        let remote_addr = self.session.remote_addr();
+        let flush_interval = self.session.config().flush_interval;
+        let recv_buf_size = self.session.config().recv_buf_size;
+
+        let recv_source = match self.session.take_channel_receiver() {
+            Some(rx) => RecvSource::Channel(rx),
+            None => RecvSource::Socket,
+        };
+
+        let session = Arc::new(TokioMutex::new(self.session));
+
+        let read_half = OwnedReadHalf {
+            session: session.clone(),
+            socket,
+            remote_addr,
+            recv_source,
+            udp_recv_buf: vec![0u8; recv_buf_size],
+            flush_interval,
+            read_buf: self.read_buf,
+            read_pos: self.read_pos,
+            read_len: self.read_len,
+        };
+
+        let write_half = OwnedWriteHalf { session };
+
+        (read_half, write_half)
+    }
+}
+
+// --- OwnedReadHalf impl ---
+
+impl OwnedReadHalf {
+    /// Receives data from the KCP protocol asynchronously.
+    ///
+    /// Blocks until data is available, the session times out, or the session is closed.
+    /// The underlying mutex is only held briefly during synchronous KCP operations,
+    /// never across await points.
+    pub async fn recv_kcp(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {
+        loop {
+            // 1. Briefly lock session to try recv
+            {
+                let mut session = self.session.lock().await;
+                match session.try_recv(buf) {
+                    Ok(n) => return Ok(n),
+                    Err(KcpTokioError::Kcp(crate::core::KcpError::RecvWouldBlock)) => {}
+                    Err(e) => return Err(e),
+                }
+                if session.is_timed_out() {
+                    session.close();
+                    return Err(KcpTokioError::Timeout);
+                }
+                if session.is_closed() {
+                    return Err(KcpTokioError::Closed);
+                }
+            } // lock released
+
+            // 2. Wait for I/O data WITHOUT holding the lock
+            let received_data = match &mut self.recv_source {
+                RecvSource::Socket => {
+                    tokio::select! {
+                        result = self.socket.recv_from(&mut self.udp_recv_buf) => {
+                            match result {
+                                Ok((n, addr)) if addr == self.remote_addr => {
+                                    Some(self.udp_recv_buf[..n].to_vec())
+                                }
+                                Ok(_) => None,
+                                Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => None,
+                                Err(e) => return Err(e.into()),
+                            }
+                        }
+                        _ = tokio::time::sleep(self.flush_interval) => None,
+                    }
+                }
+                RecvSource::Channel(rx) => {
+                    tokio::select! {
+                        pkt = rx.recv() => {
+                            match pkt {
+                                Some(data) => Some(data),
+                                None => return Err(KcpTokioError::Closed),
+                            }
+                        }
+                        _ = tokio::time::sleep(self.flush_interval) => None,
+                    }
+                }
+            };
+
+            // 3. Briefly lock session to input data and update
+            {
+                let mut session = self.session.lock().await;
+                if let Some(data) = received_data {
+                    session.input(&data).ok();
+                }
+                session.update();
+            } // lock released
+        }
+    }
+
+    /// Returns the KCP conversation ID.
+    pub async fn conv(&self) -> u32 {
+        self.session.lock().await.conv()
+    }
+
+    /// Returns the remote peer's address.
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr
+    }
+
+    /// Returns the local socket address.
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+}
+
+impl AsyncRead for OwnedReadHalf {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+
+        // Return buffered data first
+        if this.read_pos < this.read_len {
+            let remaining = &this.read_buf[this.read_pos..this.read_len];
+            let to_copy = remaining.len().min(buf.remaining());
+            buf.put_slice(&remaining[..to_copy]);
+            this.read_pos += to_copy;
+            return Poll::Ready(Ok(()));
+        }
+        this.read_pos = 0;
+        this.read_len = 0;
+
+        // Try to lock and recv (non-blocking lock attempt)
+        let mut lock_fut = Box::pin(this.session.lock());
+        match lock_fut.as_mut().poll(cx) {
+            Poll::Ready(mut session) => {
+                match session.try_recv(&mut this.read_buf) {
+                    Ok(n) => {
+                        let to_copy = n.min(buf.remaining());
+                        buf.put_slice(&this.read_buf[..to_copy]);
+                        if to_copy < n {
+                            this.read_pos = to_copy;
+                            this.read_len = n;
+                        }
+                        return Poll::Ready(Ok(()));
+                    }
+                    Err(KcpTokioError::Kcp(crate::core::KcpError::RecvWouldBlock)) => {}
+                    Err(KcpTokioError::Closed) => return Poll::Ready(Ok(())),
+                    Err(KcpTokioError::Timeout) => {
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "KCP session timed out",
+                        )))
+                    }
+                    Err(e) => return Poll::Ready(Err(io::Error::other(e.to_string()))),
+                }
+                // Drive update while we have the lock
+                session.update();
+            }
+            Poll::Pending => {}
+        }
+
+        // Poll the socket for new data
+        let mut udp_buf = [0u8; 65536];
+        let mut read_buf = ReadBuf::new(&mut udp_buf);
+        match this.socket.poll_recv_from(cx, &mut read_buf) {
+            Poll::Ready(Ok(addr)) => {
+                let n = read_buf.filled().len();
+                if addr == this.remote_addr {
+                    // Lock briefly to input and try recv
+                    let mut lock_fut = Box::pin(this.session.lock());
+                    if let Poll::Ready(mut session) = lock_fut.as_mut().poll(cx) {
+                        session.input(&udp_buf[..n]).ok();
+                        session.update();
+                        match session.try_recv(&mut this.read_buf) {
+                            Ok(n) => {
+                                let to_copy = n.min(buf.remaining());
+                                buf.put_slice(&this.read_buf[..to_copy]);
+                                if to_copy < n {
+                                    this.read_pos = to_copy;
+                                    this.read_len = n;
+                                }
+                                return Poll::Ready(Ok(()));
+                            }
+                            Err(KcpTokioError::Kcp(crate::core::KcpError::RecvWouldBlock)) => {}
+                            Err(KcpTokioError::Closed) => return Poll::Ready(Ok(())),
+                            Err(e) => return Poll::Ready(Err(io::Error::other(e.to_string()))),
+                        }
+                    }
+                }
+            }
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+            Poll::Pending => {}
+        }
+
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+
+// --- OwnedWriteHalf impl ---
+
+impl OwnedWriteHalf {
+    /// Sends data reliably through the KCP protocol.
+    ///
+    /// The underlying mutex is only held briefly during the synchronous
+    /// KCP send operation.
+    pub async fn send_kcp(&mut self, data: &[u8]) -> KcpTokioResult<usize> {
+        let mut session = self.session.lock().await;
+        session.send(data)
+    }
+
+    /// Flushes all pending data in the KCP send queue.
+    pub async fn flush(&mut self) {
+        let mut session = self.session.lock().await;
+        session.update();
+    }
+
+    /// Closes the KCP stream.
+    ///
+    /// Both the read half and write half will stop working after this call.
+    pub async fn close(&mut self) {
+        let mut session = self.session.lock().await;
+        session.close();
+    }
+
+    /// Returns whether the stream has been closed.
+    pub async fn is_closed(&self) -> bool {
+        self.session.lock().await.is_closed()
+    }
+
+    /// Returns the KCP conversation ID.
+    pub async fn conv(&self) -> u32 {
+        self.session.lock().await.conv()
+    }
+}
+
+impl AsyncWrite for OwnedWriteHalf {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let mut lock_fut = Box::pin(this.session.lock());
+        match lock_fut.as_mut().poll(cx) {
+            Poll::Ready(mut session) => match session.send(buf) {
+                Ok(n) => Poll::Ready(Ok(n)),
+                Err(KcpTokioError::Closed) => Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "KCP session closed",
+                ))),
+                Err(KcpTokioError::Io(e)) => Poll::Ready(Err(e)),
+                Err(e) => Poll::Ready(Err(io::Error::other(e.to_string()))),
+            },
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let mut lock_fut = Box::pin(this.session.lock());
+        match lock_fut.as_mut().poll(cx) {
+            Poll::Ready(mut session) => {
+                session.update();
+                Poll::Ready(Ok(()))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let mut lock_fut = Box::pin(this.session.lock());
+        match lock_fut.as_mut().poll(cx) {
+            Poll::Ready(mut session) => {
+                session.close();
+                Poll::Ready(Ok(()))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }

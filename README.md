@@ -115,6 +115,38 @@ async fn example() -> std::io::Result<()> {
 }
 ```
 
+### Split Read/Write (`into_split`)
+
+`KcpStream::into_split()` splits a stream into independent read and write halves, enabling concurrent reading and writing from separate tasks — similar to [`TcpStream::into_split()`](https://docs.rs/tokio/latest/tokio/net/struct.TcpStream.html#method.into_split):
+
+```rust
+use kcp_io::{KcpStream, KcpSessionConfig};
+
+async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    let stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
+    let (mut read_half, mut write_half) = stream.into_split();
+
+    // Spawn a task for reading
+    let reader = tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            match read_half.recv_kcp(&mut buf).await {
+                Ok(n) => println!("Received: {}", String::from_utf8_lossy(&buf[..n])),
+                Err(_) => break,
+            }
+        }
+    });
+
+    // Write from the current task
+    write_half.send_kcp(b"hello").await?;
+    write_half.send_kcp(b"world").await?;
+    write_half.close().await;
+
+    reader.await?;
+    Ok(())
+}
+```
+
 ### Using Only the Core Layer
 
 If you only need the safe KCP wrapper without async support:
@@ -157,9 +189,31 @@ kcp.update(0);
 | `connect_with_conv(addr, conv, config)` | Connect with a specific conversation ID |
 | `send_kcp(data)` | Send data reliably |
 | `recv_kcp(buf)` | Receive data |
+| `into_split()` | Split into `OwnedReadHalf` + `OwnedWriteHalf` for concurrent read/write |
+| `close()` | Close the stream |
+| `flush()` | Flush pending KCP data |
 | `conv()` | Get the conversation ID |
 | `remote_addr()` | Get the remote address |
 | `local_addr()` | Get the local address |
+
+**`OwnedReadHalf` methods** (from `into_split()`):
+
+| Method | Description |
+|--------|-------------|
+| `recv_kcp(buf)` | Receive data (async, never holds lock across await) |
+| `conv()` | Get the conversation ID |
+| `remote_addr()` | Get the remote address |
+| `local_addr()` | Get the local address |
+
+**`OwnedWriteHalf` methods** (from `into_split()`):
+
+| Method | Description |
+|--------|-------------|
+| `send_kcp(data)` | Send data reliably |
+| `flush()` | Flush pending KCP data |
+| `close()` | Close the stream (affects both halves) |
+| `is_closed()` | Check if the stream has been closed |
+| `conv()` | Get the conversation ID |
 
 **`KcpListener` methods:**
 

@@ -1,0 +1,237 @@
+---
+description: AI coding guidance and rules for this repository.
+alwaysApply: true
+---
+<rule>
+
+# kcp-io — AI Coding Rules
+
+## 1. Project Overview
+
+- **Type**: Rust networking library (single crate) wrapping the KCP ARQ protocol.
+- **License**: MIT
+- **Minimum Rust Version**: 1.85.0 (edition 2021)
+- **Architecture**: Three-layer module design exposed via feature flags:
+  - `kcp-sys` — Raw FFI bindings to the C KCP library (`src/sys.rs`)
+  - `kcp-core` — Safe Rust wrapper (`src/core/`) — implies `kcp-sys`
+  - `kcp-tokio` — Async Tokio integration (`src/tokio_rt/`) — implies `kcp-core` (default feature)
+- **Entry Point**: Library crate (`src/lib.rs`). No `main()`. Examples in `examples/`.
+- **C Code**: The original KCP C implementation lives in `kcp/ikcp.c` and is compiled via `build.rs` using the `cc` crate.
+
+## 2. Code Style and Conventions
+
+### 2.1 Naming
+- **Types / Structs / Enums / Traits**: `PascalCase` (e.g., `KcpStream`, `KcpTokioError`)
+- **Functions / Methods / Variables**: `snake_case` (e.g., `recv_kcp`, `flush_interval`)
+- **Constants**: `UPPER_SNAKE_CASE` (e.g., `IKCP_OVERHEAD`, `IKCP_LOG_OUTPUT`)
+- **Modules / Files**: `snake_case` (e.g., `tokio_rt`, `session.rs`)
+- **Type aliases**: `PascalCase` (e.g., `SessionKey`, `OutputCallback`, `SharedKcpSession`)
+
+### 2.2 File Structure
+- Every `.rs` file MUST start with a module-level rustdoc comment (`//!`) describing the module's purpose, main types, and a usage example.
+- No copyright or license headers in source files.
+- Public items MUST have `///` rustdoc comments including:
+  - A summary line
+  - `# Arguments` section (for functions with parameters)
+  - `# Errors` section (for fallible functions)
+  - `# Example` section (for major public APIs)
+  - `# Safety` section (for unsafe functions)
+
+### 2.3 Formatting and Linting
+- All code MUST pass `cargo fmt` with default settings.
+- All code MUST pass `cargo clippy --all-targets -- -D warnings` with zero warnings.
+- Prefer Clippy's suggested idioms (e.g., `is_some_and(...)` over `map_or(false, ...)`).
+
+### 2.4 FFI Module Exceptions
+- The `sys` module (`src/sys.rs`) is allowed to use `#![allow(non_upper_case_globals, non_camel_case_types, non_snake_case)]` because it mirrors C naming conventions.
+- FFI struct layouts must use `#[repr(C)]`.
+
+## 3. Architecture Rules
+
+### 3.1 Layer Boundaries
+- **`sys` layer**: Raw `unsafe extern "C"` declarations only. No logic.
+- **`core` layer**: All `unsafe` FFI calls to `sys` MUST be encapsulated here. The `Kcp` struct wraps the raw C pointer and manages its lifecycle via `Drop`. No `unsafe` code should leak beyond this layer.
+- **`tokio_rt` layer**: Pure safe Rust async code. MUST NOT contain any `unsafe` blocks. Depends on `core` types only through their safe public API.
+- New features should respect this layering. If a new FFI function is needed, add it to `sys`, wrap it safely in `core`, then use it in `tokio_rt`.
+
+### 3.2 Module Visibility
+- Each sub-module (`config.rs`, `error.rs`, etc.) is private by default; public types are re-exported from the layer's `mod.rs`.
+- Convenience re-exports at the crate root (`src/lib.rs`) allow users to write `kcp_io::KcpStream` instead of `kcp_io::tokio_rt::stream::KcpStream`.
+- Internal-only items use `pub(crate)` visibility.
+
+### 3.3 Feature Flags
+- The default feature is `kcp-tokio`, which implies `kcp-core` and `kcp-sys`.
+- When adding new optional dependencies, gate them behind feature flags and use `dep:` syntax in `Cargo.toml`.
+- All non-default code paths must be guarded with `#[cfg(feature = "...")]`.
+
+## 4. Core Types and Their Import Paths
+
+### 4.1 Core Layer (`kcp_io::core`)
+| Type | Path | Purpose |
+|------|------|---------|
+| `Kcp` | `kcp_io::core::Kcp` | Safe wrapper around C IKCPCB |
+| `KcpConfig` | `kcp_io::core::KcpConfig` | Protocol config (presets: `default()`, `fast()`, `normal()`) |
+| `KcpError` | `kcp_io::core::KcpError` | Error enum for KCP operations |
+| `KcpResult<T>` | `kcp_io::core::KcpResult` | Alias for `Result<T, KcpError>` |
+
+### 4.2 Tokio Layer (`kcp_io::tokio_rt`)
+| Type | Path | Purpose |
+|------|------|---------|
+| `KcpStream` | `kcp_io::tokio_rt::KcpStream` | Async KCP connection (like `TcpStream`) |
+| `KcpListener` | `kcp_io::tokio_rt::KcpListener` | Server-side listener (like `TcpListener`) |
+| `KcpSessionConfig` | `kcp_io::tokio_rt::KcpSessionConfig` | Runtime + protocol config combined |
+| `KcpTokioError` | `kcp_io::tokio_rt::KcpTokioError` | Async-layer error enum |
+| `KcpTokioResult<T>` | `kcp_io::tokio_rt::KcpTokioResult` | Alias for `Result<T, KcpTokioError>` |
+| `OwnedReadHalf` | `kcp_io::tokio_rt::OwnedReadHalf` | Read half from `KcpStream::into_split()` |
+| `OwnedWriteHalf` | `kcp_io::tokio_rt::OwnedWriteHalf` | Write half from `KcpStream::into_split()` |
+
+### 4.3 Key Constants
+| Constant | Value | Location |
+|----------|-------|----------|
+| `IKCP_OVERHEAD` | `24` (bytes) | `kcp_io::sys::IKCP_OVERHEAD` |
+| `IKCP_LOG_*` | Various bitmasks | `kcp_io::sys` |
+
+## 5. Key Domain Patterns
+
+### 5.1 Async Pattern
+- Use `async/await` with `tokio::select!` for concurrent I/O (e.g., waiting on UDP socket + timer simultaneously).
+- Use `Poll`-based implementations for `AsyncRead` / `AsyncWrite` trait impls.
+- Always prefer `tokio::time::sleep` over `std::thread::sleep`.
+
+### 5.2 Concurrency and Locking
+- Shared session state uses `Arc<tokio::sync::Mutex<KcpSession>>`.
+- **Critical rule**: NEVER hold a `TokioMutex` lock across an `.await` point. Acquire the lock, perform synchronous operations, then release it before awaiting I/O.
+- The split pattern (`into_split()`) creates `OwnedReadHalf` and `OwnedWriteHalf` that share the session via `Arc<Mutex>`.
+
+### 5.3 Error Handling
+- Use `thiserror::Error` derive macro for all error enums.
+- Two error layers:
+  - `KcpError` — Core protocol errors (create, send, recv, input, MTU failures).
+  - `KcpTokioError` — Async-layer errors wrapping `KcpError`, `io::Error`, plus `Timeout`, `Closed`, `ConnectionFailed`.
+- Conversion: `KcpError` converts into `KcpTokioError` via `#[from]`.
+- In `AsyncRead`/`AsyncWrite` impls, convert `KcpTokioError` to `io::Error` using `io::Error::other()` or specific `ErrorKind`s (`BrokenPipe` for closed, `TimedOut` for timeout).
+
+### 5.4 Platform Compatibility (Windows)
+- On Windows, `recv_from` may return `ErrorKind::ConnectionReset` (OS error 10054 / WSAECONNRESET) when an ICMP "Port Unreachable" is received. This MUST be caught and ignored (log at `debug` level, then `continue`).
+- In the KCP output callback, `try_send_to` errors of kind `WouldBlock` and `ConnectionReset` are silently treated as success (`Ok(data.len())`), since KCP handles retransmission.
+
+### 5.5 Ghost Session Prevention
+- The `KcpListener` maintains a `closed_sessions: HashMap<SessionKey, Instant>` with a 60-second TTL to prevent stale retransmission packets from creating new sessions for recently closed connections.
+- Periodically clean up expired entries when the map grows beyond 100 entries.
+
+### 5.6 KCP State Machine
+- `Kcp::update(current_ms)` MUST be called periodically (driven by `flush_interval` in the async layer).
+- The monotonic clock source is `Instant::now().elapsed().as_millis() as u32` from the session's `start_time`.
+- When `flush_write` is enabled, `kcp.flush()` is called immediately after `kcp.send()` to minimize latency.
+
+### 5.7 Logging
+- Use the `log` crate (`log::debug!`, `log::error!`, etc.).
+- **`debug`**: Normal operational events that can be safely ignored (e.g., ignored ICMP errors, closed sessions).
+- **`error`**: Unexpected failures that indicate bugs or critical issues (e.g., failed to create session, UDP recv error).
+- Do NOT use `println!` or `eprintln!` in library code. Those are only for examples.
+
+## 6. Memory and Resource Management
+
+### 6.1 FFI Lifecycle
+- `Kcp::new()` allocates a C `IKCPCB` via `ikcp_create` and a Rust `Box<KcpContext>` for the output callback.
+- `Kcp::drop()` releases both: `ikcp_release(kcp)` for the C object, `Box::from_raw(ctx)` for the Rust context.
+- The output callback (`kcp_output_cb`) is an `unsafe extern "C"` function that bridges C → Rust. The `user` pointer must be a valid `*mut KcpContext`.
+
+### 6.2 Socket Sharing
+- UDP sockets are wrapped in `Arc<UdpSocket>` and shared between the session and the output callback.
+- `KcpListener` runs a background `tokio::spawn` task that owns the socket and routes packets via `mpsc::channel`.
+
+### 6.3 Send/Recv Modes
+- **Client (Socket mode)**: `KcpSession` reads directly from the `UdpSocket`.
+- **Server (Channel mode)**: `KcpSession` receives pre-routed packets from `mpsc::Receiver<Vec<u8>>`.
+- `take_channel_receiver()` transfers the channel to `OwnedReadHalf` during split.
+
+## 7. Testing Patterns
+
+### 7.1 Integration Tests
+- Location: `tests/integration_tests.rs`
+- Use `#[tokio::test]` for all async tests.
+- Bind to `127.0.0.1:0` to get a random ephemeral port (avoids port conflicts).
+- Wait `50ms` after binding before connecting (allows the listener's background task to start).
+- Use `time::timeout(Duration::from_secs(5), handle)` to prevent tests from hanging.
+- Use a shared `test_config()` helper with a short timeout (5 seconds) for faster test feedback.
+- Each test should use a unique `conv` ID to avoid interference.
+
+### 7.2 Test Scaffolding Template
+```rust
+#[tokio::test]
+async fn test_new_feature() {
+    let config = test_config();
+
+    let mut listener = KcpListener::bind("127.0.0.1:0", config.clone())
+        .await
+        .unwrap();
+    let server_addr = listener.local_addr();
+
+    let server_handle = tokio::spawn(async move {
+        let (mut stream, _addr) = listener.accept().await.unwrap();
+        // Server-side logic here
+        let mut buf = [0u8; 1024];
+        let n = stream.recv_kcp(&mut buf).await.unwrap();
+        stream.send_kcp(&buf[..n]).await.unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut client = KcpStream::connect_with_conv(server_addr, config, 0xUNIQUE)
+        .await
+        .unwrap();
+
+    // Client-side logic here
+    client.send_kcp(b"test data").await.unwrap();
+    let mut buf = [0u8; 1024];
+    let n = client.recv_kcp(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"test data");
+
+    let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;
+}
+```
+
+### 7.3 Benchmarks
+- Location: `benches/throughput.rs`
+- Use `criterion` with `async_tokio` feature.
+- Compare against raw UDP and TCP baselines.
+
+## 8. Development Commands
+
+| Command | Purpose |
+|---------|---------|
+| `cargo build` | Build the library (compiles C code via `build.rs`) |
+| `cargo test` | Run all integration tests and doc tests |
+| `cargo test test_name` | Run a single test by name |
+| `cargo clippy --all-targets -- -D warnings` | Lint with zero tolerance |
+| `cargo fmt` | Format all code |
+| `cargo fmt -- --check` | Check formatting without modifying |
+| `cargo bench` | Run throughput/latency benchmarks |
+| `cargo doc --open` | Generate and open API documentation |
+| `cargo publish --dry-run` | Verify package before publishing |
+
+## 9. Documentation
+
+- **README.md**: English, structured as Quick Start → API Overview → Features → Architecture → Building/Testing → Project Structure.
+- **README_ZH.md**: Chinese version, kept in sync with English. Bidirectional language links at the top.
+- When modifying public API, update BOTH READMEs and all affected rustdoc comments.
+- Doc tests (````no_run` or `````) must compile. Use `# async fn example()` wrapper pattern for async examples.
+
+## 10. Dependencies Policy
+
+| Dependency | Purpose | Version Policy |
+|------------|---------|----------------|
+| `thiserror` | Error derive macro | Major version `2` |
+| `log` | Logging facade | `0.4` |
+| `tokio` | Async runtime (optional) | `1` with features: `net`, `rt`, `time`, `sync`, `macros`, `io-util` |
+| `bytes` | Byte buffer utilities (optional) | `1` |
+| `cc` | C compiler (build-dep) | `1` |
+| `env_logger` | Logging for examples/tests (dev-dep) | `0.11` |
+| `criterion` | Benchmarking (dev-dep) | `0.5` |
+
+- Keep dependencies minimal. Prefer Rust std library where possible.
+- Optional dependencies must use `dep:` syntax in feature flag definitions.
+- Pin major versions only; let Cargo resolve minor/patch.
+
+</rule>

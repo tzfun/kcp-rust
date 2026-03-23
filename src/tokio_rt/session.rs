@@ -226,6 +226,18 @@ impl KcpSession {
         &self.config
     }
 
+    /// Extracts the channel receiver from the session (for split support).
+    ///
+    /// After calling this, the session's recv_mode becomes `Socket` and the
+    /// original `recv()` method should no longer be called. The channel receiver
+    /// is transferred to `OwnedReadHalf` for independent async reading.
+    pub(crate) fn take_channel_receiver(&mut self) -> Option<mpsc::Receiver<Vec<u8>>> {
+        match std::mem::replace(&mut self.recv_mode, RecvMode::Socket) {
+            RecvMode::Channel(rx) => Some(rx),
+            RecvMode::Socket => None,
+        }
+    }
+
     /// Receives data asynchronously, blocking until data is available.
     ///
     /// This method uses `tokio::select!` to concurrently:

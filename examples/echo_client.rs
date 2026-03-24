@@ -19,9 +19,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream.send_kcp(msg.as_bytes()).await?;
         println!("Sent: {}", msg);
 
-        let mut buf = [0u8; 4096];
-        let n = stream.recv_kcp(&mut buf).await?;
-        println!("Echo: {}", String::from_utf8_lossy(&buf[..n]));
+        let data = stream.recv_kcp().await?;
+        println!("Echo: {}", String::from_utf8_lossy(&data));
     }
 
     println!("Done!");

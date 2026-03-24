@@ -198,7 +198,9 @@ impl Kcp {
             Ok(ret as usize)
         } else if ret == -1 {
             Err(KcpError::RecvWouldBlock)
-        } else if ret == -2 {
+        } else if ret == -2 || ret == -3 {
+            // -2: peeksize returned negative (incomplete message fragments)
+            // -3: peeksize > buf.len() (buffer too small for the next message)
             let need = self.peeksize().unwrap_or(0);
             Err(KcpError::RecvBufferTooSmall {
                 need,

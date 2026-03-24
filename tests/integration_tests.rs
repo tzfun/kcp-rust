@@ -31,10 +31,9 @@ async fn test_client_server_basic_communication() {
         let (mut stream, addr) = listener.accept().await.expect("Failed to accept");
         println!("Server: accepted connection from {}", addr);
 
-        let mut buf = [0u8; 1024];
-        let n = stream.recv_kcp(&mut buf).await.expect("Server recv failed");
+        let data = stream.recv_kcp().await.expect("Server recv failed");
         stream
-            .send_kcp(&buf[..n])
+            .send_kcp(&data)
             .await
             .expect("Server send failed");
     });
@@ -48,10 +47,215 @@ async fn test_client_server_basic_communication() {
     let msg = b"Hello, KCP server!";
     client.send_kcp(msg).await.expect("Client send failed");
 
-    let mut buf = [0u8; 1024];
-    let n = client.recv_kcp(&mut buf).await.expect("Client recv failed");
+    let data = client.recv_kcp().await.expect("Client recv failed");
 
-    assert_eq!(&buf[..n], msg);
+    assert_eq!(&data, msg);
+
+    let _ = time::timeout(Duration::from_secs(5), server_handle).await;
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive recv buffer tests — verify recv_kcp() auto-sizing
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_recv_kcp_auto_small_message() {
+    let config = test_config();
+
+    let mut listener = KcpListener::bind("127.0.0.1:0", config.clone())
+        .await
+        .unwrap();
+    let server_addr = listener.local_addr();
+
+    let server_handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        // Client sends first to establish the session, then server echoes
+        let data = stream.recv_kcp().await.unwrap();
+        // Send back a tiny 5-byte message
+        stream.send_kcp(b"hello").await.unwrap();
+        assert_eq!(&data, b"ping");
+    });
+
+    time::sleep(Duration::from_millis(50)).await;
+
+    let mut client = KcpStream::connect_with_conv(server_addr, config, 0xA001)
+        .await
+        .unwrap();
+
+    // Initiate communication so the server session is active
+    client.send_kcp(b"ping").await.unwrap();
+
+    let data = client.recv_kcp().await.unwrap();
+    assert_eq!(data, b"hello");
+    assert_eq!(data.len(), 5, "Auto buffer should be exactly 5 bytes");
+
+    let _ = time::timeout(Duration::from_secs(5), server_handle).await;
+}
+
+#[tokio::test]
+async fn test_recv_kcp_auto_large_message() {
+    let config = test_config();
+
+    let mut listener = KcpListener::bind("127.0.0.1:0", config.clone())
+        .await
+        .unwrap();
+    let server_addr = listener.local_addr();
+
+    // Create a 8000-byte payload — larger than a single MTU (1400)
+    let large_msg: Vec<u8> = (0..8000u16).map(|i| (i % 256) as u8).collect();
+    let expected = large_msg.clone();
+
+    let server_handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        // Wait for client to initiate, then send the large payload
+        let _ = stream.recv_kcp().await.unwrap();
+        stream.send_kcp(&expected).await.unwrap();
+    });
+
+    time::sleep(Duration::from_millis(50)).await;
+
+    let mut client = KcpStream::connect_with_conv(server_addr, config, 0xA002)
+        .await
+        .unwrap();
+
+    client.send_kcp(b"go").await.unwrap();
+
+    // recv_kcp() should auto-size to hold the entire 8000-byte message
+    let data = client.recv_kcp().await.unwrap();
+    assert_eq!(data.len(), 8000, "Auto buffer should be exactly 8000 bytes");
+    assert_eq!(data, large_msg);
+
+    let _ = time::timeout(Duration::from_secs(5), server_handle).await;
+}
+
+#[tokio::test]
+async fn test_recv_kcp_auto_varying_sizes() {
+    let config = test_config();
+
+    let mut listener = KcpListener::bind("127.0.0.1:0", config.clone())
+        .await
+        .unwrap();
+    let server_addr = listener.local_addr();
+
+    let server_handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        // Echo-based: client sends a request, server replies with varying sizes
+        for response in [
+            b"A".as_slice(),
+            &[0xBB; 100],
+            &vec![0xCC; 5000],
+            b"end".as_slice(),
+        ] {
+            let _ = stream.recv_kcp().await.unwrap(); // wait for client request
+            stream.send_kcp(response).await.unwrap();
+        }
+    });
+
+    time::sleep(Duration::from_millis(50)).await;
+
+    let mut client = KcpStream::connect_with_conv(server_addr, config, 0xA003)
+        .await
+        .unwrap();
+
+    // Each recv_kcp() should return exactly the right size
+    client.send_kcp(b"req1").await.unwrap();
+    let data = client.recv_kcp().await.unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data, b"A");
+
+    client.send_kcp(b"req2").await.unwrap();
+    let data = client.recv_kcp().await.unwrap();
+    assert_eq!(data.len(), 100);
+    assert_eq!(data, vec![0xBB; 100]);
+
+    client.send_kcp(b"req3").await.unwrap();
+    let data = client.recv_kcp().await.unwrap();
+    assert_eq!(data.len(), 5000);
+    assert_eq!(data, vec![0xCC; 5000]);
+
+    client.send_kcp(b"req4").await.unwrap();
+    let data = client.recv_kcp().await.unwrap();
+    assert_eq!(data.len(), 3);
+    assert_eq!(data, b"end");
+
+    let _ = time::timeout(Duration::from_secs(5), server_handle).await;
+}
+
+#[tokio::test]
+async fn test_recv_kcp_auto_split_half() {
+    let config = test_config();
+
+    let mut listener = KcpListener::bind("127.0.0.1:0", config.clone())
+        .await
+        .unwrap();
+    let server_addr = listener.local_addr();
+
+    let server_handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        // Echo-based: wait for request, then reply with varying sizes
+        let _ = stream.recv_kcp().await.unwrap();
+        stream.send_kcp(&vec![0xDD; 3000]).await.unwrap();
+        let _ = stream.recv_kcp().await.unwrap();
+        stream.send_kcp(b"tiny").await.unwrap();
+    });
+
+    time::sleep(Duration::from_millis(50)).await;
+
+    let client = KcpStream::connect_with_conv(server_addr, config, 0xA004)
+        .await
+        .unwrap();
+    let (mut read_half, mut write_half) = client.into_split();
+
+    // OwnedReadHalf::recv_kcp() should also auto-size correctly
+    write_half.send_kcp(b"req1").await.unwrap();
+    let data = read_half.recv_kcp().await.unwrap();
+    assert_eq!(data.len(), 3000);
+    assert_eq!(data, vec![0xDD; 3000]);
+
+    write_half.send_kcp(b"req2").await.unwrap();
+    let data = read_half.recv_kcp().await.unwrap();
+    assert_eq!(data.len(), 4);
+    assert_eq!(data, b"tiny");
+
+    let _ = time::timeout(Duration::from_secs(5), server_handle).await;
+}
+
+#[tokio::test]
+async fn test_recv_kcp_buf_too_small_returns_error() {
+    let config = test_config();
+
+    let mut listener = KcpListener::bind("127.0.0.1:0", config.clone())
+        .await
+        .unwrap();
+    let server_addr = listener.local_addr();
+
+    let server_handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        // Wait for client request, then send a 200-byte message
+        let _ = stream.recv_kcp().await.unwrap();
+        stream.send_kcp(&[0xEE; 200]).await.unwrap();
+    });
+
+    time::sleep(Duration::from_millis(50)).await;
+
+    let mut client = KcpStream::connect_with_conv(server_addr, config, 0xA005)
+        .await
+        .unwrap();
+
+    client.send_kcp(b"go").await.unwrap();
+
+    // Using recv_kcp_buf with a buffer that's too small should fail
+    let mut small_buf = [0u8; 10];
+    let result = client.recv_kcp_buf(&mut small_buf).await;
+    assert!(
+        result.is_err(),
+        "recv_kcp_buf should fail when buffer is smaller than message"
+    );
+
+    // But recv_kcp() (auto) should succeed on the same data
+    let data = client.recv_kcp().await.unwrap();
+    assert_eq!(data.len(), 200);
+    assert_eq!(data, vec![0xEE; 200]);
 
     let _ = time::timeout(Duration::from_secs(5), server_handle).await;
 }
@@ -157,10 +361,9 @@ async fn run_packet_loss_test(loss_rate: f64, message_count: usize) {
     let expected_count = message_count;
     let server_handle = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
         for _ in 0..expected_count {
-            let n = stream.recv_kcp(&mut buf).await.unwrap();
-            stream.send_kcp(&buf[..n]).await.unwrap();
+            let data = stream.recv_kcp().await.unwrap();
+            stream.send_kcp(&data).await.unwrap();
         }
     });
 
@@ -175,10 +378,9 @@ async fn run_packet_loss_test(loss_rate: f64, message_count: usize) {
         let msg = format!("loss-test-msg-{:04}", i);
         client.send_kcp(msg.as_bytes()).await.unwrap();
 
-        let mut buf = [0u8; 4096];
-        let n = client.recv_kcp(&mut buf).await.unwrap();
+        let data = client.recv_kcp().await.unwrap();
         assert_eq!(
-            &buf[..n],
+            &data,
             msg.as_bytes(),
             "Message {} corrupted or lost at {:.0}% loss rate",
             i,
@@ -242,9 +444,8 @@ async fn test_split_concurrent_read_write() {
         write_half.send_kcp(b"server-hello").await.unwrap();
 
         // Server echoes back whatever it receives
-        let mut buf = [0u8; 1024];
-        let n = read_half.recv_kcp(&mut buf).await.unwrap();
-        assert_eq!(&buf[..n], b"client-hello");
+        let data = read_half.recv_kcp().await.unwrap();
+        assert_eq!(&data, b"client-hello");
 
         // Send a second message
         write_half.send_kcp(b"server-ack").await.unwrap();
@@ -262,12 +463,11 @@ async fn test_split_concurrent_read_write() {
     write_half.send_kcp(b"client-hello").await.unwrap();
 
     // Client receives server's greeting and ack
-    let mut buf = [0u8; 1024];
-    let n = read_half.recv_kcp(&mut buf).await.unwrap();
-    assert_eq!(&buf[..n], b"server-hello");
+    let data = read_half.recv_kcp().await.unwrap();
+    assert_eq!(&data, b"server-hello");
 
-    let n = read_half.recv_kcp(&mut buf).await.unwrap();
-    assert_eq!(&buf[..n], b"server-ack");
+    let data = read_half.recv_kcp().await.unwrap();
+    assert_eq!(&data, b"server-ack");
 
     let _ = time::timeout(Duration::from_secs(5), server_handle).await;
 }
@@ -284,10 +484,9 @@ async fn test_split_separate_tasks() {
     let server_handle = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         // Echo 3 messages
-        let mut buf = [0u8; 1024];
         for _ in 0..3 {
-            let n = stream.recv_kcp(&mut buf).await.unwrap();
-            stream.send_kcp(&buf[..n]).await.unwrap();
+            let data = stream.recv_kcp().await.unwrap();
+            stream.send_kcp(&data).await.unwrap();
         }
     });
 
@@ -315,10 +514,9 @@ async fn test_split_separate_tasks() {
     let read_barrier = barrier.clone();
     let reader = tokio::spawn(async move {
         let expected = [b"msg-1" as &[u8], b"msg-2", b"msg-3"];
-        let mut buf = [0u8; 1024];
         for exp in &expected {
-            let n = read_half.recv_kcp(&mut buf).await.unwrap();
-            assert_eq!(&buf[..n], *exp);
+            let data = read_half.recv_kcp().await.unwrap();
+            assert_eq!(&data, *exp);
         }
         read_barrier.wait().await;
     });
@@ -339,9 +537,8 @@ async fn test_split_close_from_write_half() {
 
     let _server_handle = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 1024];
         // Just try to read until error
-        let _ = stream.recv_kcp(&mut buf).await;
+        let _ = stream.recv_kcp().await;
     });
 
     time::sleep(Duration::from_millis(50)).await;
@@ -360,7 +557,7 @@ async fn test_split_close_from_write_half() {
     // Both halves should now return Closed
     assert!(write_half.is_closed().await);
     assert!(write_half.send_kcp(b"after-close").await.is_err());
-    assert!(read_half.recv_kcp(&mut [0u8; 1024]).await.is_err());
+    assert!(read_half.recv_kcp().await.is_err());
 }
 
 #[tokio::test]
@@ -376,9 +573,8 @@ async fn test_bidirectional_communication() {
         let (mut stream, _addr) = listener.accept().await.unwrap();
         stream.send_kcp(b"Hello from server").await.unwrap();
 
-        let mut buf = [0u8; 1024];
-        let n = stream.recv_kcp(&mut buf).await.unwrap();
-        assert_eq!(&buf[..n], b"Hello from client");
+        let data = stream.recv_kcp().await.unwrap();
+        assert_eq!(&data, b"Hello from client");
     });
 
     time::sleep(Duration::from_millis(50)).await;
@@ -389,9 +585,8 @@ async fn test_bidirectional_communication() {
 
     client.send_kcp(b"Hello from client").await.unwrap();
 
-    let mut buf = [0u8; 1024];
-    let n = client.recv_kcp(&mut buf).await.unwrap();
-    assert_eq!(&buf[..n], b"Hello from server");
+    let data = client.recv_kcp().await.unwrap();
+    assert_eq!(&data, b"Hello from server");
 
     let _ = time::timeout(Duration::from_secs(5), server_handle).await;
 }
@@ -415,10 +610,9 @@ async fn test_large_data_transfer() {
         let (mut stream, _) = listener.accept().await.unwrap();
 
         let mut total_recv = Vec::new();
-        let mut buf = vec![0u8; 8192];
         while total_recv.len() < expected.len() {
-            let n = stream.recv_kcp(&mut buf).await.unwrap();
-            total_recv.extend_from_slice(&buf[..n]);
+            let data = stream.recv_kcp().await.unwrap();
+            total_recv.extend_from_slice(&data);
         }
         assert_eq!(total_recv.len(), expected.len());
         assert_eq!(&total_recv, &expected);
@@ -435,10 +629,9 @@ async fn test_large_data_transfer() {
     client.send_kcp(&large_data).await.unwrap();
 
     let mut total_recv = Vec::new();
-    let mut buf = vec![0u8; 8192];
     while total_recv.len() < large_data.len() {
-        let n = client.recv_kcp(&mut buf).await.unwrap();
-        total_recv.extend_from_slice(&buf[..n]);
+        let data = client.recv_kcp().await.unwrap();
+        total_recv.extend_from_slice(&data);
     }
     assert_eq!(total_recv.len(), large_data.len());
     assert_eq!(&total_recv, &large_data);
@@ -459,9 +652,8 @@ async fn test_multiple_messages() {
         let (mut stream, _) = listener.accept().await.unwrap();
 
         for _i in 0..3 {
-            let mut buf = [0u8; 1024];
-            let n = stream.recv_kcp(&mut buf).await.unwrap();
-            stream.send_kcp(&buf[..n]).await.unwrap();
+            let data = stream.recv_kcp().await.unwrap();
+            stream.send_kcp(&data).await.unwrap();
         }
     });
 
@@ -480,9 +672,8 @@ async fn test_multiple_messages() {
     for msg in &messages {
         client.send_kcp(msg).await.unwrap();
 
-        let mut buf = [0u8; 1024];
-        let n = client.recv_kcp(&mut buf).await.unwrap();
-        assert_eq!(&buf[..n], *msg);
+        let data = client.recv_kcp().await.unwrap();
+        assert_eq!(&data, *msg);
     }
 
     let _ = time::timeout(Duration::from_secs(5), server_handle).await;

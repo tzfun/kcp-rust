@@ -160,7 +160,7 @@ impl KcpSession {
         Ok(n)
     }
 
-    /// Attempts to receive data without blocking.
+    /// Attempts to receive data into the provided buffer without blocking.
     ///
     /// Returns immediately with available data or an error if no data is ready.
     pub fn try_recv(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {
@@ -168,6 +168,21 @@ impl KcpSession {
             return Err(KcpTokioError::Closed);
         }
         Ok(self.kcp.recv(buf)?)
+    }
+
+    /// Attempts to receive data without blocking, returning a dynamically-sized `Vec<u8>`.
+    ///
+    /// Internally calls `peeksize()` to determine the exact message size, then allocates
+    /// a buffer of the correct size. This avoids the caller needing to guess the buffer size.
+    pub fn try_recv_auto(&mut self) -> KcpTokioResult<Vec<u8>> {
+        if self.closed {
+            return Err(KcpTokioError::Closed);
+        }
+        let size = self.kcp.peeksize()?;
+        let mut buf = vec![0u8; size];
+        let n = self.kcp.recv(&mut buf)?;
+        buf.truncate(n);
+        Ok(buf)
     }
 
     /// Feeds raw packet data into the KCP engine and updates the last-received timestamp.
@@ -261,37 +276,67 @@ impl KcpSession {
                 Err(crate::core::KcpError::RecvWouldBlock) => {}
                 Err(e) => return Err(e.into()),
             }
-            // Check timeout
-            if self.is_timed_out() {
-                self.closed = true;
-                return Err(KcpTokioError::Timeout);
-            }
-            let flush_interval = self.config.flush_interval;
-            // Wait for new data or timer tick
-            match &mut self.recv_mode {
-                RecvMode::Socket => {
-                    tokio::select! {
-                        result = self.socket.recv_from(&mut self.udp_recv_buf) => {
-                            let (n, addr) = result?;
-                            if addr == self.remote_addr { self.last_recv_time = Instant::now(); self.kcp.input(&self.udp_recv_buf[..n]).ok(); }
-                        }
-                        _ = time::sleep(flush_interval) => {}
-                    }
-                }
-                RecvMode::Channel(rx) => {
-                    tokio::select! {
-                        pkt = rx.recv() => {
-                            match pkt {
-                                Some(data) => { self.last_recv_time = Instant::now(); self.kcp.input(&data).ok(); }
-                                None => { self.closed = true; return Err(KcpTokioError::Closed); }
-                            }
-                        }
-                        _ = time::sleep(flush_interval) => {}
-                    }
-                }
-            }
-            self.update();
+            self.wait_for_data().await?;
         }
+    }
+
+    /// Receives data asynchronously, returning a dynamically-sized `Vec<u8>`.
+    ///
+    /// Internally uses `peeksize()` to determine the exact message size and
+    /// allocates a buffer of the correct size. The caller does not need to
+    /// pre-allocate or guess the buffer size.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`recv()`](KcpSession::recv).
+    pub async fn recv_auto(&mut self) -> KcpTokioResult<Vec<u8>> {
+        if self.closed {
+            return Err(KcpTokioError::Closed);
+        }
+        loop {
+            match self.try_recv_auto() {
+                Ok(data) => return Ok(data),
+                Err(KcpTokioError::Kcp(crate::core::KcpError::RecvWouldBlock)) => {}
+                Err(e) => return Err(e),
+            }
+            self.wait_for_data().await?;
+        }
+    }
+
+    /// Waits for incoming data or a timer tick, feeds it into KCP, and updates
+    /// the state machine. Shared logic between `recv()` and `recv_auto()`.
+    async fn wait_for_data(&mut self) -> KcpTokioResult<()> {
+        // Check timeout
+        if self.is_timed_out() {
+            self.closed = true;
+            return Err(KcpTokioError::Timeout);
+        }
+        let flush_interval = self.config.flush_interval;
+        // Wait for new data or timer tick
+        match &mut self.recv_mode {
+            RecvMode::Socket => {
+                tokio::select! {
+                    result = self.socket.recv_from(&mut self.udp_recv_buf) => {
+                        let (n, addr) = result?;
+                        if addr == self.remote_addr { self.last_recv_time = Instant::now(); self.kcp.input(&self.udp_recv_buf[..n]).ok(); }
+                    }
+                    _ = time::sleep(flush_interval) => {}
+                }
+            }
+            RecvMode::Channel(rx) => {
+                tokio::select! {
+                    pkt = rx.recv() => {
+                        match pkt {
+                            Some(data) => { self.last_recv_time = Instant::now(); self.kcp.input(&data).ok(); }
+                            None => { self.closed = true; return Err(KcpTokioError::Closed); }
+                        }
+                    }
+                    _ = time::sleep(flush_interval) => {}
+                }
+            }
+        }
+        self.update();
+        Ok(())
     }
 }
 

@@ -18,19 +18,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("[{}] New connection (conv={})", remote_addr, stream.conv());
 
         tokio::spawn(async move {
-            let mut buf = [0u8; 4096];
             loop {
-                match stream.recv_kcp(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let data = &buf[..n];
+                match stream.recv_kcp().await {
+                    Ok(data) if data.is_empty() => break,
+                    Ok(data) => {
                         println!(
                             "[{}] Received {} bytes: {:?}",
                             remote_addr,
-                            n,
-                            String::from_utf8_lossy(data)
+                            data.len(),
+                            String::from_utf8_lossy(&data)
                         );
-                        if let Err(e) = stream.send_kcp(data).await {
+                        if let Err(e) = stream.send_kcp(&data).await {
                             eprintln!("[{}] Send error: {}", remote_addr, e);
                             break;
                         }

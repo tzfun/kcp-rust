@@ -6,7 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **`recv_kcp()` returns `Vec<u8>` (breaking change)**: The primary receive
+  method `recv_kcp()` on `KcpStream`, `OwnedReadHalf` now returns
+  `KcpTokioResult<Vec<u8>>` with automatic buffer sizing via `peeksize()`.
+  Callers no longer need to pre-allocate a buffer or guess the message size.
+- **`recv_kcp_buf()` for buffer-based receive**: The original `&mut [u8]`
+  signature is preserved as `recv_kcp_buf()` for callers who prefer manual
+  buffer management or need zero-allocation receives.
+
+### Added
+
+- **`KcpSession::try_recv_auto()`**: Internal method that uses `peeksize()`
+  to allocate an exact-sized buffer before calling `kcp.recv()`.
+- **`KcpSession::recv_auto()`**: Async auto-sizing receive method.
+- **`KcpSession::wait_for_data()`**: Shared helper extracting the
+  `tokio::select!` I/O wait logic from `recv()` and `recv_auto()`.
+- **`OwnedReadHalf::wait_for_data()`**: Shared helper for the split read
+  half, extracting duplicated I/O wait logic.
+
+---
+
 ## [0.0.3] — 2026-03-23
+
+### Fixed
+
+- **`recv()` error code `-3` misclassified**: KCP C library returns `-3`
+  from `ikcp_recv` when the receive buffer is too small for the next message
+  (`peeksize > buf.len()`). Previously this fell into the generic
+  `RecvFailed(-3)` branch. Now both `-2` and `-3` are correctly mapped to
+  `KcpError::RecvBufferTooSmall { need, got }`, providing actionable error
+  messages instead of an opaque error code.
 
 ### Changed
 

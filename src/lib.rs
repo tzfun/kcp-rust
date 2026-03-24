@@ -18,9 +18,8 @@
 //! let mut stream = KcpStream::connect("127.0.0.1:8080", KcpSessionConfig::fast()).await?;
 //! stream.send_kcp(b"hello").await?;
 //!
-//! let mut buf = [0u8; 1024];
-//! let n = stream.recv_kcp(&mut buf).await?;
-//! println!("Received: {:?}", &buf[..n]);
+//! let data = stream.recv_kcp().await?;
+//! println!("Received: {:?}", data);
 //! # Ok(())
 //! # }
 //! ```

@@ -15,9 +15,8 @@
 //! let mut stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
 //! stream.send_kcp(b"hello").await?;
 //!
-//! let mut buf = [0u8; 1024];
-//! let n = stream.recv_kcp(&mut buf).await?;
-//! println!("Received: {:?}", &buf[..n]);
+//! let data = stream.recv_kcp().await?;
+//! println!("Received: {:?}", data);
 //! # Ok(())
 //! # }
 //! ```
@@ -153,10 +152,38 @@ impl KcpStream {
         self.session.send(data)
     }
 
-    /// Receives data from the KCP protocol asynchronously.
+    /// Receives data from the KCP protocol asynchronously, returning a `Vec<u8>`.
+    ///
+    /// The buffer is automatically sized to fit the incoming message — the caller
+    /// does not need to pre-allocate or guess the buffer size.
     ///
     /// Blocks until data is available, the session times out, or the session is closed.
-    pub async fn recv_kcp(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use kcp_io::tokio_rt::{KcpStream, KcpSessionConfig};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
+    /// let data = stream.recv_kcp().await?;
+    /// println!("Received {} bytes: {:?}", data.len(), data);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn recv_kcp(&mut self) -> KcpTokioResult<Vec<u8>> {
+        self.session.recv_auto().await
+    }
+
+    /// Receives data from the KCP protocol into a caller-provided buffer.
+    ///
+    /// This is the original buffer-based receive method. Use [`recv_kcp()`](KcpStream::recv_kcp)
+    /// for automatic buffer management.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KcpTokioError::Kcp(KcpError::RecvBufferTooSmall)`](crate::core::KcpError::RecvBufferTooSmall)
+    /// if `buf` is smaller than the next message.
+    pub async fn recv_kcp_buf(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {
         self.session.recv(buf).await
     }
 
@@ -352,9 +379,8 @@ enum RecvSource {
 ///
 /// // Spawn a task for reading
 /// let reader = tokio::spawn(async move {
-///     let mut buf = [0u8; 4096];
-///     while let Ok(n) = read_half.recv_kcp(&mut buf).await {
-///         println!("Received: {:?}", &buf[..n]);
+///     while let Ok(data) = read_half.recv_kcp().await {
+///         println!("Received: {:?}", data);
 ///     }
 /// });
 ///
@@ -416,12 +442,11 @@ impl KcpStream {
     /// let stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
     /// let (mut read_half, mut write_half) = stream.into_split();
     ///
-    /// let reader = tokio::spawn(async move {
-    ///     let mut buf = [0u8; 4096];
-    ///     while let Ok(n) = read_half.recv_kcp(&mut buf).await {
-    ///         println!("Received {} bytes", n);
-    ///     }
-    /// });
+/// let reader = tokio::spawn(async move {
+///     while let Ok(data) = read_half.recv_kcp().await {
+///         println!("Received {} bytes", data.len());
+///     }
+/// });
     ///
     /// write_half.send_kcp(b"hello").await?;
     /// write_half.send_kcp(b"world").await?;
@@ -465,12 +490,48 @@ impl KcpStream {
 // --- OwnedReadHalf impl ---
 
 impl OwnedReadHalf {
-    /// Receives data from the KCP protocol asynchronously.
+    /// Receives data from the KCP protocol asynchronously, returning a `Vec<u8>`.
+    ///
+    /// The buffer is automatically sized to fit the incoming message — the caller
+    /// does not need to pre-allocate or guess the buffer size.
     ///
     /// Blocks until data is available, the session times out, or the session is closed.
     /// The underlying mutex is only held briefly during synchronous KCP operations,
     /// never across await points.
-    pub async fn recv_kcp(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {
+    pub async fn recv_kcp(&mut self) -> KcpTokioResult<Vec<u8>> {
+        loop {
+            // 1. Briefly lock session to try recv
+            {
+                let mut session = self.session.lock().await;
+                match session.try_recv_auto() {
+                    Ok(data) => return Ok(data),
+                    Err(KcpTokioError::Kcp(crate::core::KcpError::RecvWouldBlock)) => {}
+                    Err(e) => return Err(e),
+                }
+                if session.is_timed_out() {
+                    session.close();
+                    return Err(KcpTokioError::Timeout);
+                }
+                if session.is_closed() {
+                    return Err(KcpTokioError::Closed);
+                }
+            } // lock released
+
+            // 2. Wait for I/O data WITHOUT holding the lock
+            self.wait_for_data().await?;
+        }
+    }
+
+    /// Receives data from the KCP protocol into a caller-provided buffer.
+    ///
+    /// This is the original buffer-based receive method. Use [`recv_kcp()`](OwnedReadHalf::recv_kcp)
+    /// for automatic buffer management.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KcpTokioError::Kcp(KcpError::RecvBufferTooSmall)`](crate::core::KcpError::RecvBufferTooSmall)
+    /// if `buf` is smaller than the next message.
+    pub async fn recv_kcp_buf(&mut self, buf: &mut [u8]) -> KcpTokioResult<usize> {
         loop {
             // 1. Briefly lock session to try recv
             {
@@ -490,44 +551,51 @@ impl OwnedReadHalf {
             } // lock released
 
             // 2. Wait for I/O data WITHOUT holding the lock
-            let received_data = match &mut self.recv_source {
-                RecvSource::Socket => {
-                    tokio::select! {
-                        result = self.socket.recv_from(&mut self.udp_recv_buf) => {
-                            match result {
-                                Ok((n, addr)) if addr == self.remote_addr => {
-                                    Some(self.udp_recv_buf[..n].to_vec())
-                                }
-                                Ok(_) => None,
-                                Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => None,
-                                Err(e) => return Err(e.into()),
-                            }
-                        }
-                        _ = tokio::time::sleep(self.flush_interval) => None,
-                    }
-                }
-                RecvSource::Channel(rx) => {
-                    tokio::select! {
-                        pkt = rx.recv() => {
-                            match pkt {
-                                Some(data) => Some(data),
-                                None => return Err(KcpTokioError::Closed),
-                            }
-                        }
-                        _ = tokio::time::sleep(self.flush_interval) => None,
-                    }
-                }
-            };
-
-            // 3. Briefly lock session to input data and update
-            {
-                let mut session = self.session.lock().await;
-                if let Some(data) = received_data {
-                    session.input(&data).ok();
-                }
-                session.update();
-            } // lock released
+            self.wait_for_data().await?;
         }
+    }
+
+    /// Waits for incoming data, feeds it into KCP, and updates the state machine.
+    /// Shared logic between `recv_kcp()` and `recv_kcp_buf()`.
+    async fn wait_for_data(&mut self) -> KcpTokioResult<()> {
+        let received_data = match &mut self.recv_source {
+            RecvSource::Socket => {
+                tokio::select! {
+                    result = self.socket.recv_from(&mut self.udp_recv_buf) => {
+                        match result {
+                            Ok((n, addr)) if addr == self.remote_addr => {
+                                Some(self.udp_recv_buf[..n].to_vec())
+                            }
+                            Ok(_) => None,
+                            Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => None,
+                            Err(e) => return Err(e.into()),
+                        }
+                    }
+                    _ = tokio::time::sleep(self.flush_interval) => None,
+                }
+            }
+            RecvSource::Channel(rx) => {
+                tokio::select! {
+                    pkt = rx.recv() => {
+                        match pkt {
+                            Some(data) => Some(data),
+                            None => return Err(KcpTokioError::Closed),
+                        }
+                    }
+                    _ = tokio::time::sleep(self.flush_interval) => None,
+                }
+            }
+        };
+
+        // 3. Briefly lock session to input data and update
+        {
+            let mut session = self.session.lock().await;
+            if let Some(data) = received_data {
+                session.input(&data).ok();
+            }
+            session.update();
+        } // lock released
+        Ok(())
     }
 
     /// Returns the KCP conversation ID.

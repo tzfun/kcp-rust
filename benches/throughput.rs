@@ -23,17 +23,15 @@ fn bench_kcp_throughput(c: &mut Criterion) {
                 let addr = listener.local_addr();
                 let server = tokio::spawn(async move {
                     let (mut stream, _) = listener.accept().await.unwrap();
-                    let mut buf = vec![0u8; size];
-                    let n = stream.recv_kcp(&mut buf).await.unwrap();
-                    stream.send_kcp(&buf[..n]).await.unwrap();
+                    let data = stream.recv_kcp().await.unwrap();
+                    stream.send_kcp(&data).await.unwrap();
                 });
                 let mut client = KcpStream::connect(addr, KcpSessionConfig::fast())
                     .await
                     .unwrap();
                 let data = vec![0xABu8; size];
                 client.send_kcp(&data).await.unwrap();
-                let mut buf = vec![0u8; size];
-                client.recv_kcp(&mut buf).await.unwrap();
+                client.recv_kcp().await.unwrap();
                 server.await.unwrap();
             });
         });
@@ -125,9 +123,8 @@ fn bench_kcp_latency(c: &mut Criterion) {
             let addr = listener.local_addr();
             let server = tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
-                let mut buf = [0u8; 32];
-                let n = stream.recv_kcp(&mut buf).await.unwrap();
-                stream.send_kcp(&buf[..n]).await.unwrap();
+                let data = stream.recv_kcp().await.unwrap();
+                stream.send_kcp(&data).await.unwrap();
             });
             let mut client = KcpStream::connect(addr, KcpSessionConfig::fast())
                 .await
@@ -136,8 +133,7 @@ fn bench_kcp_latency(c: &mut Criterion) {
                 .send_kcp(b"ping-kcp-latency-test-32-bytes!!")
                 .await
                 .unwrap();
-            let mut buf = [0u8; 32];
-            client.recv_kcp(&mut buf).await.unwrap();
+            client.recv_kcp().await.unwrap();
             server.await.unwrap();
         });
     });

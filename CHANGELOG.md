@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.0.4] — 2026-03-24
 
 ### Changed
 
@@ -27,6 +27,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `tokio::select!` I/O wait logic from `recv()` and `recv_auto()`.
 - **`OwnedReadHalf::wait_for_data()`**: Shared helper for the split read
   half, extracting duplicated I/O wait logic.
+- **5 new integration tests** for adaptive recv buffer:
+  `test_recv_kcp_auto_small_message`, `test_recv_kcp_auto_large_message`,
+  `test_recv_kcp_auto_varying_sizes`, `test_recv_kcp_auto_split_half`,
+  `test_recv_kcp_buf_too_small_returns_error`.
 
 ---
 

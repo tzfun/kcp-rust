@@ -32,10 +32,7 @@ async fn test_client_server_basic_communication() {
         println!("Server: accepted connection from {}", addr);
 
         let data = stream.recv_kcp().await.expect("Server recv failed");
-        stream
-            .send_kcp(&data)
-            .await
-            .expect("Server send failed");
+        stream.send_kcp(&data).await.expect("Server send failed");
     });
 
     time::sleep(Duration::from_millis(50)).await;

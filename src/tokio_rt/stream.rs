@@ -442,11 +442,11 @@ impl KcpStream {
     /// let stream = KcpStream::connect("127.0.0.1:9090", KcpSessionConfig::fast()).await?;
     /// let (mut read_half, mut write_half) = stream.into_split();
     ///
-/// let reader = tokio::spawn(async move {
-///     while let Ok(data) = read_half.recv_kcp().await {
-///         println!("Received {} bytes", data.len());
-///     }
-/// });
+    /// let reader = tokio::spawn(async move {
+    ///     while let Ok(data) = read_half.recv_kcp().await {
+    ///         println!("Received {} bytes", data.len());
+    ///     }
+    /// });
     ///
     /// write_half.send_kcp(b"hello").await?;
     /// write_half.send_kcp(b"world").await?;

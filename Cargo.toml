@@ -11,6 +11,15 @@ readme = "README.md"
 keywords = ["kcp", "udp", "reliable", "tokio", "network"]
 categories = ["network-programming", "asynchronous"]
 links = "kcp"
+exclude = [
+    ".codemaker/",
+    ".github/",
+    "tests/",
+    "benches/",
+    "PLAN.md",
+    "README_ZH.md",
+    "CHANGELOG.md",
+]
 
 [features]
 default = ["kcp-tokio"]
